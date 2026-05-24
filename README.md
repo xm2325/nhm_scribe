@@ -59,13 +59,13 @@ python scripts/run_pipeline.py --config configs/demo_10.yaml
 
 It uploads the generated `data/processed/`, `data/interim/ocr/`, `data/interim/llm/`, and `reports/` directories as a downloadable workflow artifact. Generated outputs are intentionally not committed to the repository.
 
-The same workflow also has a Qwen + RAG artifact job. To enable it, add a repository Actions secret named `DASHSCOPE_API_KEY` or `QWEN_API_KEY`, then re-run the workflow. The job runs:
+The same workflow also has a DeepSeek v4 Pro + RAG artifact job through NVIDIA NIM. To enable it, add a repository Actions secret named `NVIDIA_API_KEY` or `NGC_API_KEY`, then re-run the workflow. The job runs:
 
 ```bash
-python scripts/run_pipeline.py --config configs/qwen_rag_demo.yaml
+python scripts/run_pipeline.py --config configs/deepseek_rag_demo.yaml
 ```
 
-The Qwen job writes `qwen_api_rag` rows into `data/processed/extractions_flat.csv`, saves raw model responses in `data/interim/llm/raw_llm_outputs.jsonl`, saves retrieved RAG context in `data/interim/llm/rag_contexts.jsonl`, and uploads those files in the `herbarium-scribe-qwen-rag-*` artifact. The Qwen API call uses DashScope's [OpenAI-compatible chat completions endpoint](https://docs.qwencloud.com/api-reference/toolkitframework/openai-compatible/overview) by default.
+The DeepSeek job writes `nvidia_api_rag` rows into `data/processed/extractions_flat.csv`, saves raw model responses in `data/interim/llm/raw_llm_outputs.jsonl`, saves retrieved RAG context in `data/interim/llm/rag_contexts.jsonl`, and uploads those files in the `herbarium-scribe-deepseek-rag-*` artifact. The call uses NVIDIA's OpenAI-compatible endpoint, `https://integrate.api.nvidia.com/v1`, with model `deepseek-ai/deepseek-v4-pro`.
 
 ## Running the 50-record evaluation
 
@@ -99,6 +99,7 @@ call_llm(messages, config) -> str
 Supported configured backends are:
 
 - `none`: no LLM; rule-based extraction only. This is the default.
+- `nvidia_api`: optional NVIDIA NIM API backend using `NVIDIA_API_KEY` or `NGC_API_KEY`; the DeepSeek demo uses `deepseek-ai/deepseek-v4-pro`.
 - `qwen_api`: optional Qwen API backend using `DASHSCOPE_API_KEY` or `QWEN_API_KEY`.
 - `qwen_local`: optional local Qwen-style inference. Missing packages or memory failures are logged and converted into an empty response.
 - `anthropic`: optional API backend, key from `ANTHROPIC_API_KEY`.

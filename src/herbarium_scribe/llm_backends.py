@@ -47,6 +47,28 @@ def call_llm(messages: list[dict[str, str]], config: dict[str, Any]) -> str:
     lcfg = config.get("llm", {})
     if backend == "none":
         return ""
+    if backend in {"nvidia", "nvidia_api", "nvidia_nim", "deepseek_nvidia"}:
+        key = os.environ.get("NVIDIA_API_KEY") or os.environ.get("NGC_API_KEY")
+        if not key:
+            logger.warning("NVIDIA_API_KEY or NGC_API_KEY is not set; returning empty NVIDIA output.")
+            return ""
+        try:
+            return _chat_completions_request(
+                base_url=lcfg.get("base_url") or os.environ.get("NVIDIA_BASE_URL") or "https://integrate.api.nvidia.com/v1",
+                api_key=key,
+                model=lcfg.get("model") or "deepseek-ai/deepseek-v4-pro",
+                messages=messages,
+                temperature=float(lcfg.get("temperature", 0.0)),
+                max_tokens=int(lcfg.get("max_tokens", 1600)),
+                timeout_seconds=int(lcfg.get("timeout_seconds", 90)),
+            )
+        except urllib.error.HTTPError as e:
+            detail = e.read().decode("utf-8", errors="replace")
+            logger.warning("NVIDIA API backend failed with HTTP %s: %s", e.code, detail[:500])
+            return ""
+        except Exception as e:
+            logger.warning("NVIDIA API backend failed: %s", e)
+            return ""
     if backend in {"qwen", "qwen_api", "qwen_dashscope"}:
         key = os.environ.get("DASHSCOPE_API_KEY") or os.environ.get("QWEN_API_KEY")
         if not key:
