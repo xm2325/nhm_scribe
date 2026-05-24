@@ -105,6 +105,7 @@ def _parse_llm_json(text: str) -> dict[str, Any] | None:
 
 def stage_extract(config_path: str | Path) -> pd.DataFrame:
     cfg, paths = load_runtime(config_path)
+    backend = clean_str(cfg.get("llm", {}).get("backend", "none")).lower() or "none"
     eval_df = _read_eval(paths)
     ocr_path = paths["processed"] / "ocr_by_region.csv"
     ocr_df = pd.read_csv(ocr_path, dtype=str).fillna("") if ocr_path.exists() else stage_ocr(config_path)
@@ -113,8 +114,11 @@ def stage_extract(config_path: str | Path) -> pd.DataFrame:
     corpus = build_rag_corpus(demo_df if cfg.get("rag", {}).get("use_demo_examples", True) else None)
     rows = []
     llm_jsonl = paths["llm"] / "raw_llm_outputs.jsonl"
+    rag_jsonl = paths["llm"] / "rag_contexts.jsonl"
     if llm_jsonl.exists():
         llm_jsonl.unlink()
+    if rag_jsonl.exists():
+        rag_jsonl.unlink()
     for _, gold in eval_df.iterrows():
         occ = clean_str(gold.get("occurrenceID"))
         text = ocr_combined.get(occ, "")
@@ -122,16 +126,19 @@ def stage_extract(config_path: str | Path) -> pd.DataFrame:
         flat = flatten_record(rule_rec)
         flat.update({"occurrenceID": occ, "method": "rule_ocr", "parse_failure": False})
         rows.append(flat)
-        if cfg.get("llm", {}).get("backend", "none") != "none":
-            ctx = format_context_for_prompt(retrieve_context(text, corpus, top_k=int(cfg.get("rag", {}).get("top_k", 3))))
+        if backend != "none":
+            retrieved = retrieve_context(text, corpus, top_k=int(cfg.get("rag", {}).get("top_k", 3)))
+            ctx = format_context_for_prompt(retrieved)
             prompt = f"Context:\n{ctx}\n\nOCR text:\n{text}"
             messages = [
-                {"role": "system", "content": "Extract herbarium label fields as JSON with value, confidence, evidence_span."},
+                {"role": "system", "content": "Extract herbarium label fields as JSON. Return one object with keys catalogNumber, scientificName, recordedBy, eventDate, country, stateProvince, decimalLatitude, decimalLongitude, and typeStatus. Each field must be an object with value, confidence, and evidence_span. Return JSON only."},
                 {"role": "user", "content": prompt},
             ]
+            with rag_jsonl.open("a", encoding="utf-8") as f:
+                f.write(json.dumps({"occurrenceID": occ, "backend": backend, "retrieved_context": retrieved}, ensure_ascii=False) + "\n")
             raw = call_llm(messages, cfg)
             with llm_jsonl.open("a", encoding="utf-8") as f:
-                f.write(json.dumps({"occurrenceID": occ, "raw_output": raw}, ensure_ascii=False) + "\n")
+                f.write(json.dumps({"occurrenceID": occ, "backend": backend, "raw_output": raw}, ensure_ascii=False) + "\n")
             obj = _parse_llm_json(raw)
             if obj is None:
                 obj = {}
@@ -141,7 +148,7 @@ def stage_extract(config_path: str | Path) -> pd.DataFrame:
             from .schema import validate_record
             llm_rec = validate_record(obj)
             llm_flat = flatten_record(llm_rec)
-            llm_flat.update({"occurrenceID": occ, "method": "llm", "parse_failure": parse_failure})
+            llm_flat.update({"occurrenceID": occ, "method": f"{backend}_rag", "parse_failure": parse_failure})
             rows.append(llm_flat)
     out = pd.DataFrame(rows)
     out = out.merge(eval_df[["occurrenceID", "institutionCode"]], on="occurrenceID", how="left")
@@ -172,7 +179,16 @@ def stage_graph(config_path: str | Path) -> tuple[pd.DataFrame, pd.DataFrame]:
     cfg, paths = load_runtime(config_path)
     pred_path = paths["processed"] / "extractions_flat_reconciled.csv"
     pred = pd.read_csv(pred_path, dtype=str).fillna("") if pred_path.exists() else stage_reconcile(config_path)
-    graph_src = pred[pred["method"] == "rule_ocr"].copy() if "method" in pred.columns else pred.copy()
+    graph_src = pred.copy()
+    if "method" in pred.columns:
+        preferred = clean_str(cfg.get("graph", {}).get("preferred_method", ""))
+        if preferred and (pred["method"] == preferred).any():
+            graph_src = pred[pred["method"] == preferred].copy()
+        elif cfg.get("llm", {}).get("backend", "none") != "none":
+            llm_rows = pred[pred["method"].astype(str).str.endswith("_rag")].copy()
+            graph_src = llm_rows if len(llm_rows) else pred[pred["method"] == "rule_ocr"].copy()
+        else:
+            graph_src = pred[pred["method"] == "rule_ocr"].copy()
     return export_graph(graph_src, paths)
 
 

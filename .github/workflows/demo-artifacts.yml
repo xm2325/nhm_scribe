@@ -30,4 +30,59 @@ jobs:
           path: |
             data/processed/
             data/interim/ocr/
+            data/interim/llm/
+            reports/
+
+  qwen-rag-artifacts:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install package
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -e '.[dev]'
+      - name: Check Qwen API key
+        id: qwen-key
+        env:
+          DASHSCOPE_API_KEY: ${{ secrets.DASHSCOPE_API_KEY }}
+          QWEN_API_KEY: ${{ secrets.QWEN_API_KEY }}
+        run: |
+          mkdir -p data/processed data/interim/ocr data/interim/llm reports
+          if [ -z "${DASHSCOPE_API_KEY}${QWEN_API_KEY}" ]; then
+            echo "enabled=false" >> "$GITHUB_OUTPUT"
+            cat > reports/qwen_rag_not_run.md <<'EOF'
+# Qwen + RAG pipeline not run
+
+The Qwen + RAG artifact job requires a repository secret named `DASHSCOPE_API_KEY` or `QWEN_API_KEY`.
+
+Add the secret in GitHub under Settings -> Secrets and variables -> Actions, then re-run the `demo artifacts` workflow.
+EOF
+          else
+            echo "enabled=true" >> "$GITHUB_OUTPUT"
+          fi
+      - name: Run tests
+        if: steps.qwen-key.outputs.enabled == 'true'
+        run: python -m pytest
+      - name: Run Qwen + RAG pipeline
+        if: steps.qwen-key.outputs.enabled == 'true'
+        env:
+          DASHSCOPE_API_KEY: ${{ secrets.DASHSCOPE_API_KEY }}
+          QWEN_API_KEY: ${{ secrets.QWEN_API_KEY }}
+        run: python scripts/run_pipeline.py --config configs/qwen_rag_demo.yaml
+      - name: Verify Qwen + RAG outputs
+        if: steps.qwen-key.outputs.enabled == 'true'
+        run: |
+          python -c "import json, pathlib; raw=pathlib.Path('data/interim/llm/raw_llm_outputs.jsonl'); rows=[json.loads(line) for line in raw.read_text(encoding='utf-8').splitlines() if line.strip()]; assert any(r.get('raw_output') for r in rows), 'Qwen API produced no raw outputs'; assert pathlib.Path('data/interim/llm/rag_contexts.jsonl').exists(), 'RAG contexts were not written'"
+      - name: Upload Qwen + RAG outputs
+        uses: actions/upload-artifact@v4
+        with:
+          name: herbarium-scribe-qwen-rag-${{ github.run_id }}
+          retention-days: 30
+          path: |
+            data/processed/
+            data/interim/ocr/
+            data/interim/llm/
             reports/
