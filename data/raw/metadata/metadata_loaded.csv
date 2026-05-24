@@ -1,0 +1,13 @@
+occurrenceID,catalogNumber,institutionCode,scientificName,recordedBy,eventDate,country,stateProvince,decimalLatitude,decimalLongitude,typeStatus,image_url,fixture_label_text
+urn:fixture:1,E00633257,E,Abelia forrestii,George Forrest,1915,China,Yunnan,25.04,102.71,,,"Herbarium E barcode E00633257 Abelia forrestii collected by George Forrest, Yunnan China 1915 lat 25.04 lon 102.71"
+urn:fixture:2,BM000944001,BM,Quercus robur,C. Darwin,1831-07-12,United Kingdom,England,51.50,-0.12,,,British Museum BM000944001 Quercus robur C. Darwin England United Kingdom 1831-07-12 51.50 -0.12
+urn:fixture:3,K000123456,K,Rosa canina,A. Smith,1902,France,Ile-de-France,48.86,2.35,,,Kew K000123456 Rosa canina A. Smith France Ile-de-France 1902 48.86 2.35
+urn:fixture:4,NY00111222,NY,Acer saccharum,J. Torrey,1899-10,United States,New York,42.65,-73.75,,,NY Botanical Garden NY00111222 Acer saccharum collected by J. Torrey New York United States 1899-10 42.65 -73.75
+urn:fixture:5,P00456789,P,Bellis perennis,Marie Lefevre,1910,France,Normandie,49.18,-0.37,,,Museum Paris P00456789 Bellis perennis Marie Lefevre Normandie France 1910 49.18 -0.37
+urn:fixture:6,MEL222333,MEL,Eucalyptus globulus,F. Mueller,1875,Australia,Victoria,-37.81,144.96,isotype,,MEL222333 Eucalyptus globulus F. Mueller Victoria Australia 1875 Isotype -37.81 144.96
+urn:fixture:7,E00777777,E,Primula vulgaris,H. Wilson,1920,United Kingdom,Scotland,55.95,-3.19,,,E00777777 Primula vulgaris H. Wilson Scotland United Kingdom 1920 55.95 -3.19
+urn:fixture:8,BM000000888,BM,Fagus sylvatica,E. Clarke,1888,Germany,Bavaria,48.14,11.58,,,BM000000888 Fagus sylvatica E. Clarke Bavaria Germany 1888 48.14 11.58
+urn:fixture:9,K000999999,K,Salix alba,W. Hooker,1845,Italy,Tuscany,43.77,11.25,,,K000999999 Salix alba W. Hooker Tuscany Italy 1845 43.77 11.25
+urn:fixture:10,NY00999999,NY,Magnolia grandiflora,A. Gray,1860,United States,Florida,30.33,-81.65,,,NY00999999 Magnolia grandiflora A. Gray Florida United States 1860 30.33 -81.65
+urn:fixture:11,P00101010,P,Taraxacum officinale,Jean Martin,1933,Belgium,Brussels,50.85,4.35,,,P00101010 Taraxacum officinale Jean Martin Brussels Belgium 1933 50.85 4.35
+urn:fixture:12,MEL987654,MEL,Acacia dealbata,R. Brown,1804,Australia,New South Wales,-33.86,151.20,,,MEL987654 Acacia dealbata R. Brown New South Wales Australia 1804 -33.86 151.20

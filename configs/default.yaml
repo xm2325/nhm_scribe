@@ -1,0 +1,56 @@
+project:
+  name: herbarium-scribe-demo
+  random_state: 42
+
+paths:
+  metadata_csv: data/fixtures/specimen_records.csv
+  data_dir: data
+  reports_dir: reports
+
+sampling:
+  demo_size: 2
+  eval_size: 10
+  stratify_by: institutionCode
+  prefer_institution_disjoint: true
+
+metadata:
+  input_csv: data/fixtures/specimen_records.csv
+
+image:
+  allow_download: false
+  timeout_seconds: 20
+
+layout:
+  strategy: auto
+  fallback: full_image_or_fixture_text
+
+ocr:
+  backend: tesseract
+  tesseract_lang: eng
+  allow_fixture_text: true
+
+llm:
+  backend: none
+  model: null
+  temperature: 0.0
+
+rag:
+  top_k: 3
+  use_demo_examples: true
+  use_authority_cache: true
+
+reconciliation:
+  use_gbif_api: false
+  gbif_cache_path: data/processed/gbif_match_cache.json
+
+evaluation:
+  fields:
+    - catalogNumber
+    - scientificName
+    - recordedBy
+    - eventDate
+    - country
+    - stateProvince
+    - decimalLatitude
+    - decimalLongitude
+    - typeStatus

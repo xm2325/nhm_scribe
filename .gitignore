@@ -1,0 +1,43 @@
+# Python
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+*.egg-info/
+.venv/
+venv/
+
+# Secrets
+.env
+.env.*
+*.key
+secrets.*
+
+# Large/raw data and generated outputs
+/data/raw/images/*
+!/data/raw/images/.gitkeep
+/data/interim/*
+!/data/interim/.gitkeep
+!/data/interim/crops/.gitkeep
+!/data/interim/ocr/.gitkeep
+!/data/interim/llm/.gitkeep
+/data/processed/*
+!/data/processed/.gitkeep
+/reports/*.md
+/reports/figures/*
+!/reports/figures/.gitkeep
+
+# Model/cache dirs
+models/
+.cache/
+hf_cache/
+*.safetensors
+*.bin
+*.pt
+*.pth
+
+# OS/editor
+.DS_Store
+.vscode/
+.idea/

@@ -1,0 +1,4 @@
+extends: configs/default.yaml
+sampling:
+  demo_size: 2
+  eval_size: 10
