@@ -1,0 +1,33 @@
+name: demo artifacts
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  demo-artifacts:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install package
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -e '.[dev]'
+      - name: Run tests
+        run: python -m pytest
+      - name: Run reproducible demo pipeline
+        run: python scripts/run_pipeline.py --config configs/demo_10.yaml
+      - name: Upload demo outputs
+        uses: actions/upload-artifact@v4
+        with:
+          name: herbarium-scribe-demo-${{ github.run_id }}
+          retention-days: 30
+          path: |
+            data/processed/
+            data/interim/ocr/
+            reports/

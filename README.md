@@ -49,6 +49,16 @@ make test
 make demo
 ```
 
+## Cloud demo artifacts
+
+GitHub Actions runs the same quick demo on an Ubuntu runner whenever `main` is pushed, on pull requests, or when the `demo artifacts` workflow is started manually. The workflow installs the package, runs `pytest`, runs:
+
+```bash
+python scripts/run_pipeline.py --config configs/demo_10.yaml
+```
+
+It uploads the generated `data/processed/`, `data/interim/ocr/`, and `reports/` directories as a downloadable workflow artifact. Generated outputs are intentionally not committed to the repository.
+
 ## Running the 50-record evaluation
 
 ```bash
