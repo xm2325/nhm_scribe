@@ -1,4 +1,6 @@
-from herbarium_scribe.evaluate import exact_match, token_f1, evidence_proxy, truthy_flag
+import pandas as pd
+
+from herbarium_scribe.evaluate import exact_match, token_f1, evidence_proxy, truthy_flag, assign_ocr_tertiles
 
 
 def test_exact_match_normalises_case():
@@ -17,3 +19,10 @@ def test_truthy_flag_handles_csv_false_strings():
     assert truthy_flag("False") is False
     assert truthy_flag("0") is False
     assert truthy_flag("True") is True
+
+
+def test_assign_ocr_tertiles_handles_duplicate_quantile_edges():
+    scores = pd.Series([0, 0, 0, 0, 0, 0.2, 0.3, 0.4, 0.5, 1.0])
+    tertiles = assign_ocr_tertiles(scores)
+    assert len(tertiles) == len(scores)
+    assert set(tertiles).issubset({"low", "medium", "high"})

@@ -77,7 +77,16 @@ def assign_ocr_tertiles(scores: pd.Series) -> pd.Series:
     filled = scores.fillna(0.0)
     if filled.nunique() < 3:
         return pd.Series(np.where(filled >= filled.median(), "high", "low"), index=scores.index)
-    return pd.qcut(filled, q=3, labels=["low", "medium", "high"], duplicates="drop").astype(str)
+    try:
+        return pd.qcut(filled, q=3, labels=["low", "medium", "high"], duplicates="drop").astype(str)
+    except ValueError:
+        ranks = filled.rank(method="first", pct=True)
+        labels = np.select(
+            [ranks <= 1 / 3, ranks <= 2 / 3],
+            ["low", "medium"],
+            default="high",
+        )
+        return pd.Series(labels, index=scores.index)
 
 
 def evaluate_predictions(pred_df: pd.DataFrame, gold_df: pd.DataFrame, ocr_df: pd.DataFrame, fields: list[str], paths: dict[str, Path] | None = None) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
