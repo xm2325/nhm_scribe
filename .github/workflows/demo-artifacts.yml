@@ -35,6 +35,7 @@ jobs:
 
   deepseek-rag-artifacts:
     runs-on: ubuntu-latest
+    timeout-minutes: 35
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -77,6 +78,7 @@ jobs:
         run: |
           python -c "import json, pathlib; raw=pathlib.Path('data/interim/llm/raw_llm_outputs.jsonl'); rows=[json.loads(line) for line in raw.read_text(encoding='utf-8').splitlines() if line.strip()]; assert any(r.get('raw_output') for r in rows), 'NVIDIA DeepSeek API produced no raw outputs'; assert pathlib.Path('data/interim/llm/rag_contexts.jsonl').exists(), 'RAG contexts were not written'"
       - name: Upload DeepSeek v4 Pro + RAG outputs
+        if: always()
         uses: actions/upload-artifact@v4
         with:
           name: herbarium-scribe-deepseek-rag-${{ github.run_id }}
