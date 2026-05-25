@@ -22,8 +22,23 @@ def md_table(df: pd.DataFrame, max_rows: int = 20) -> str:
     return df.head(max_rows).to_markdown(index=False) + "\n"
 
 
-def read_llm_diagnostics(paths: dict[str, Path]) -> tuple[dict[str, Any], pd.DataFrame]:
-    output_files = sorted(paths["llm"].glob("deepseek_v4_pro_*_outputs.jsonl"))
+def _llm_artifact_family(cfg: dict[str, Any]) -> str:
+    method = str(cfg.get("method_name", "") or "")
+    if method.endswith("_rag"):
+        return method[:-4]
+    if method.endswith("_no_rag"):
+        return method[:-7]
+    return method
+
+
+def read_llm_diagnostics(paths: dict[str, Path], cfg: dict[str, Any] | None = None) -> tuple[dict[str, Any], pd.DataFrame]:
+    cfg = cfg or {}
+    family = _llm_artifact_family(cfg)
+    output_files: list[Path] = []
+    if family:
+        output_files = sorted(paths["llm"].glob(f"{family}_*_outputs.jsonl"))
+    if not output_files:
+        output_files = sorted(path for path in paths["llm"].glob("*_outputs.jsonl") if path.name != "raw_llm_outputs.jsonl")
     if not output_files and (paths["llm"] / "raw_llm_outputs.jsonl").exists():
         output_files = [paths["llm"] / "raw_llm_outputs.jsonl"]
 
@@ -49,7 +64,9 @@ def read_llm_diagnostics(paths: dict[str, Path]) -> tuple[dict[str, Any], pd.Dat
                 "output_file": str(path),
             })
 
-    diag_files = sorted(paths["llm"].glob("deepseek_v4_pro_*_diagnostics.csv"))
+    diag_files = sorted(paths["llm"].glob(f"{family}_*_diagnostics.csv")) if family else []
+    if not diag_files:
+        diag_files = sorted(paths["llm"].glob("*_diagnostics.csv"))
     if (paths["processed"] / "llm_diagnostics.csv").exists():
         diag_files.append(paths["processed"] / "llm_diagnostics.csv")
     diag_frames = [pd.read_csv(path, dtype=str).fillna("") for path in diag_files if path.exists()]
@@ -93,7 +110,7 @@ def read_llm_diagnostics(paths: dict[str, Path]) -> tuple[dict[str, Any], pd.Dat
         "parse_failures": int(detail["parse_failure"].sum()) if "parse_failure" in detail else 0,
         "not_evaluated": int(detail["not_evaluated"].sum()) if "not_evaluated" in detail else 0,
         "raw_outputs_path": ", ".join(str(path) for path in output_files),
-        "rag_contexts_path": str(paths["llm"] / "deepseek_v4_pro_rag_contexts.jsonl"),
+        "rag_contexts_path": str(paths["llm"] / str(cfg.get("outputs", {}).get("rag_contexts_name", ""))) if cfg.get("outputs", {}).get("rag_contexts_name") else "",
     }
     return summary, detail
 
@@ -133,14 +150,23 @@ def _rag_delta_tables(paths: dict[str, Path], cfg: dict[str, Any]) -> tuple[pd.D
     detail = _processed_csv(paths, cfg, "evaluation_detail.csv")
     if len(detail) == 0:
         return pd.DataFrame(), pd.DataFrame(), "RAG comparison unavailable because evaluation detail was not found."
-    no_rag = detail[detail["method"] == "deepseek_v4_pro_no_rag"]
-    rag = detail[detail["method"] == "deepseek_v4_pro_rag"]
+    method = str(cfg.get("method_name", "") or "")
+    rag_method = method if method.endswith("_rag") else ""
+    no_rag_method = f"{rag_method[:-4]}_no_rag" if rag_method else ""
+    if no_rag_method not in set(detail["method"]) or rag_method not in set(detail["method"]):
+        methods = sorted(set(detail["method"].astype(str)) - {"rule_ocr"})
+        no_rag_candidates = [item for item in methods if item.endswith("_no_rag")]
+        rag_candidates = [item for item in methods if item.endswith("_rag")]
+        no_rag_method = no_rag_candidates[0] if no_rag_candidates else no_rag_method
+        rag_method = rag_candidates[0] if rag_candidates else rag_method
+    no_rag = detail[detail["method"] == no_rag_method]
+    rag = detail[detail["method"] == rag_method]
     if len(no_rag) == 0 or len(rag) == 0:
-        return pd.DataFrame(), pd.DataFrame(), "RAG comparison unavailable because both DeepSeek no-RAG and RAG methods were not present."
+        return pd.DataFrame(), pd.DataFrame(), "RAG comparison unavailable because both no-RAG and RAG LLM methods were not present."
     if pd.to_numeric(no_rag.get("not_evaluated", pd.Series(dtype=float)), errors="coerce").fillna(0).eq(1).all() and pd.to_numeric(rag.get("not_evaluated", pd.Series(dtype=float)), errors="coerce").fillna(0).eq(1).all():
-        return pd.DataFrame(), pd.DataFrame(), "RAG comparison unavailable because DeepSeek was not evaluated, most likely because DEEPSEEK_API_KEY was missing."
+        return pd.DataFrame(), pd.DataFrame(), "RAG comparison unavailable because the LLM methods were not evaluated, most likely because the API key was missing or rejected."
     if pd.to_numeric(no_rag.get("parse_failure", pd.Series(dtype=float)), errors="coerce").fillna(0).eq(1).all() and pd.to_numeric(rag.get("parse_failure", pd.Series(dtype=float)), errors="coerce").fillna(0).eq(1).all():
-        return pd.DataFrame(), pd.DataFrame(), "RAG comparison unavailable because DeepSeek produced no parsed outputs for either no-RAG or RAG."
+        return pd.DataFrame(), pd.DataFrame(), "RAG comparison unavailable because the LLM produced no parsed outputs for either no-RAG or RAG."
     cols = ["occurrenceID", "field", "exact_match", "token_f1"]
     merged = no_rag[cols].merge(rag[cols], on=["occurrenceID", "field"], suffixes=("_no_rag", "_rag"))
     for col in ["exact_match_no_rag", "exact_match_rag", "token_f1_no_rag", "token_f1_rag"]:
@@ -214,7 +240,7 @@ def write_report(cfg: dict[str, Any], split_summary: pd.DataFrame, eval_summary:
     lines.append(f"- DEMO_SET occurrenceIDs: `{', '.join(sorted(demo_ids))}`\n")
     lines.append(f"- EVAL_SET occurrenceIDs: `{', '.join(sorted(eval_ids))}`\n")
     lines.append(f"- DEMO/EVAL occurrenceID overlap: `{len(overlap)}`\n")
-    lines.append("- EVAL gold metadata is not included in DeepSeek prompts; RAG examples are built from DEMO_SET only when enabled.\n")
+    lines.append("- EVAL gold metadata is not included in LLM prompts; RAG examples are built from DEMO_SET only when enabled.\n")
     lines.append("\n## Image and OCR manifest\n")
     if len(image_manifest):
         manifest = image_manifest.merge(
@@ -235,7 +261,7 @@ def write_report(cfg: dict[str, Any], split_summary: pd.DataFrame, eval_summary:
     lines.append(md_table(stratified, max_rows=100))
     if len(eval_set) < 25:
         lines.append("\n_Only 10 or fewer EVAL records were used, so OCR quality tertiles are a smoke-test diagnostic rather than a stable stratification._\n")
-    llm_summary, llm_detail = read_llm_diagnostics(paths)
+    llm_summary, llm_detail = read_llm_diagnostics(paths, cfg)
     if llm_summary:
         lines.append("\n## LLM and RAG diagnostics\n")
         lines.append(f"- Backend: `{llm_summary.get('backend', '')}`\n")
@@ -281,13 +307,13 @@ def write_report(cfg: dict[str, Any], split_summary: pd.DataFrame, eval_summary:
     lines.append("Results show feasibility only, not production-level accuracy. Optional PaddleOCR, Qwen, OpenAI, Anthropic, GBIF, and GeoNames paths are intentionally kept outside the default run.\n")
     if mode == "real_image":
         lines.append("\n## Recommendation\n")
-        deepseek_ok = llm_summary.get("not_evaluated", 1) == 0 and llm_summary.get("parse_failures", 1) / max(llm_summary.get("records", 1), 1) <= 0.2 if llm_summary else False
+        llm_ok = llm_summary.get("not_evaluated", 1) == 0 and llm_summary.get("parse_failures", 1) / max(llm_summary.get("records", 1), 1) <= 0.2 if llm_summary else False
         image_ok = image_success / max(len(image_manifest), 1) >= 0.8
         ocr_ok = ocr_nonempty / max(len(ocr), 1) >= 0.7
         overlap_ok = len(overlap) == 0
-        if image_ok and ocr_ok and overlap_ok and (deepseek_ok or not llm_summary):
-            lines.append("Proceed to 25 records only after confirming DeepSeek parsed outputs are present in the artifact.\n")
+        if image_ok and ocr_ok and overlap_ok and (llm_ok or not llm_summary):
+            lines.append("Proceed to 25 records only after confirming LLM parsed outputs are present in the artifact.\n")
         else:
-            lines.append("Stop and debug before 25 records unless image download, OCR, and DeepSeek parse rates meet the configured thresholds.\n")
+            lines.append("Stop and debug before 25 records unless image download, OCR, and LLM parse rates meet the configured thresholds.\n")
     out.write_text("".join(lines), encoding="utf-8")
     return out

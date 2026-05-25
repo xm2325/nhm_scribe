@@ -12,6 +12,14 @@ from .logging_utils import get_logger
 logger = get_logger(__name__)
 
 
+def _provider_http_error(provider: str, code: int) -> str:
+    if code in {401, 403}:
+        return f"{provider} API backend failed with HTTP {code} authentication_error. The configured API key was rejected."
+    if code == 429:
+        return f"{provider} API backend failed with HTTP 429 rate_limit. The request was rate limited."
+    return f"{provider} API backend failed with HTTP {code} provider_error. See provider dashboard or logs."
+
+
 def _chat_completions_request(
     *,
     base_url: str,
@@ -105,8 +113,7 @@ def call_llm_with_metadata(messages: list[dict[str, str]], config: dict[str, Any
             base["endpoint_reachable"] = True
             return base
         except urllib.error.HTTPError as e:
-            detail = e.read().decode("utf-8", errors="replace")
-            msg = f"DeepSeek API backend failed with HTTP {e.code}: {detail[:500]}"
+            msg = _provider_http_error("DeepSeek", e.code)
             logger.warning(msg)
             base.update({"error_message": msg, "endpoint_reachable": True})
             return base
@@ -117,8 +124,8 @@ def call_llm_with_metadata(messages: list[dict[str, str]], config: dict[str, Any
             return base
     if backend in {"nvidia", "nvidia_api", "nvidia_nim", "deepseek_nvidia"}:
         key = os.environ.get("NVIDIA_API_KEY") or os.environ.get("NGC_API_KEY")
-        base_url = lcfg.get("base_url") or os.environ.get("NVIDIA_BASE_URL") or "https://integrate.api.nvidia.com/v1"
-        model = lcfg.get("model_name") or lcfg.get("model") or "deepseek-ai/deepseek-v4-pro"
+        base_url = os.environ.get("NVIDIA_BASE_URL") or lcfg.get("base_url") or "https://integrate.api.nvidia.com/v1"
+        model = os.environ.get("NVIDIA_MODEL") or lcfg.get("model_name") or lcfg.get("model") or "deepseek-ai/deepseek-v4-pro"
         base.update({"requested_model": model, "api_key_present": bool(key), "base_url": base_url})
         if not key:
             msg = "NVIDIA_API_KEY or NGC_API_KEY is not set; returning empty NVIDIA output."
@@ -141,8 +148,7 @@ def call_llm_with_metadata(messages: list[dict[str, str]], config: dict[str, Any
             base["endpoint_reachable"] = True
             return base
         except urllib.error.HTTPError as e:
-            detail = e.read().decode("utf-8", errors="replace")
-            msg = f"NVIDIA API backend failed with HTTP {e.code}: {detail[:500]}"
+            msg = _provider_http_error("NVIDIA", e.code)
             logger.warning(msg)
             base.update({"error_message": msg, "endpoint_reachable": True})
             return base
@@ -177,8 +183,7 @@ def call_llm_with_metadata(messages: list[dict[str, str]], config: dict[str, Any
             base["endpoint_reachable"] = True
             return base
         except urllib.error.HTTPError as e:
-            detail = e.read().decode("utf-8", errors="replace")
-            msg = f"Qwen API backend failed with HTTP {e.code}: {detail[:500]}"
+            msg = _provider_http_error("Qwen", e.code)
             logger.warning(msg)
             base.update({"error_message": msg, "endpoint_reachable": True})
             return base

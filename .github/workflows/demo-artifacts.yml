@@ -49,23 +49,24 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           python -m pip install -e '.[dev]'
-      - name: Check DeepSeek API configuration
-        id: deepseek-config
+      - name: Check NVIDIA API configuration
+        id: nvidia-config
         env:
-          DEEPSEEK_API_KEY: ${{ secrets.DEEPSEEK_API_KEY }}
-          DEEPSEEK_BASE_URL: ${{ vars.DEEPSEEK_BASE_URL }}
-          DEEPSEEK_MODEL: deepseek-v4-pro
+          NVIDIA_API_KEY: ${{ secrets.NVIDIA_API_KEY }}
+          NGC_API_KEY: ${{ secrets.NGC_API_KEY }}
+          NVIDIA_BASE_URL: https://integrate.api.nvidia.com/v1
+          NVIDIA_MODEL: deepseek-ai/deepseek-v4-pro
         run: |
           mkdir -p data/processed data/interim/ocr data/interim/llm reports
-          if [ -z "${DEEPSEEK_API_KEY}" ]; then
+          if [ -z "${NVIDIA_API_KEY}${NGC_API_KEY}" ]; then
             echo "api_key_present=false" >> "$GITHUB_OUTPUT"
             printf '%s\n' \
-              '# DeepSeek V4 Pro API key not configured' \
+              '# NVIDIA DeepSeek V4 Pro API key not configured' \
               '' \
-              'The real eval-10 job will still run rule_ocr and produce diagnostics, but DeepSeek methods will be marked not evaluated.' \
+              'The real eval-10 job will still run rule_ocr and produce diagnostics, but NVIDIA DeepSeek methods will be marked not evaluated.' \
               '' \
-              'Add a repository secret named `DEEPSEEK_API_KEY` to run the direct DeepSeek API path.' \
-              > reports/deepseek_api_key_not_configured.md
+              'Add a repository secret named `NVIDIA_API_KEY` or `NGC_API_KEY` to run the NVIDIA Build DeepSeek path.' \
+              > reports/nvidia_api_key_not_configured.md
           else
             echo "api_key_present=true" >> "$GITHUB_OUTPUT"
           fi
@@ -75,18 +76,20 @@ jobs:
         run: python scripts/run_pipeline.py --config configs/rbge_e00633257_smoke.yaml
       - name: Run real eval-10 rule baseline
         run: python scripts/run_pipeline.py --config configs/real_eval_10_rule.yaml
-      - name: Run real eval-10 DeepSeek no-RAG pipeline
+      - name: Run real eval-10 NVIDIA DeepSeek no-RAG pipeline
         env:
-          DEEPSEEK_API_KEY: ${{ secrets.DEEPSEEK_API_KEY }}
-          DEEPSEEK_BASE_URL: ${{ vars.DEEPSEEK_BASE_URL }}
-          DEEPSEEK_MODEL: deepseek-v4-pro
-        run: python scripts/run_pipeline.py --config configs/real_eval_10_deepseek_no_rag.yaml
-      - name: Run real eval-10 DeepSeek RAG pipeline
+          NVIDIA_API_KEY: ${{ secrets.NVIDIA_API_KEY }}
+          NGC_API_KEY: ${{ secrets.NGC_API_KEY }}
+          NVIDIA_BASE_URL: https://integrate.api.nvidia.com/v1
+          NVIDIA_MODEL: deepseek-ai/deepseek-v4-pro
+        run: python scripts/run_pipeline.py --config configs/real_eval_10_nvidia_deepseek_no_rag.yaml
+      - name: Run real eval-10 NVIDIA DeepSeek RAG pipeline
         env:
-          DEEPSEEK_API_KEY: ${{ secrets.DEEPSEEK_API_KEY }}
-          DEEPSEEK_BASE_URL: ${{ vars.DEEPSEEK_BASE_URL }}
-          DEEPSEEK_MODEL: deepseek-v4-pro
-        run: python scripts/run_pipeline.py --config configs/real_eval_10_deepseek_rag.yaml
+          NVIDIA_API_KEY: ${{ secrets.NVIDIA_API_KEY }}
+          NGC_API_KEY: ${{ secrets.NGC_API_KEY }}
+          NVIDIA_BASE_URL: https://integrate.api.nvidia.com/v1
+          NVIDIA_MODEL: deepseek-ai/deepseek-v4-pro
+        run: python scripts/run_pipeline.py --config configs/real_eval_10_nvidia_deepseek_rag.yaml
       - name: Verify real eval-10 outputs
         run: |
           python - <<'PY'
@@ -104,8 +107,8 @@ jobs:
               "real_eval_10_image_manifest.csv",
               "real_eval_10_ocr_by_region.csv",
               "real_eval_10_predictions_rule.csv",
-              "real_eval_10_predictions_deepseek_no_rag.csv",
-              "real_eval_10_predictions_deepseek_rag.csv",
+              "real_eval_10_predictions_nvidia_deepseek_no_rag.csv",
+              "real_eval_10_predictions_nvidia_deepseek_rag.csv",
               "real_eval_10_evaluation_summary.csv",
               "real_eval_10_evaluation_by_ocr_tertile.csv",
           ]
@@ -114,30 +117,41 @@ jobs:
               print(f"::error::Missing expected outputs: {missing}")
               raise SystemExit(1)
 
+          required_paths = [
+              pathlib.Path("data/interim/llm/nvidia_deepseek_v4_pro_no_rag_outputs.jsonl"),
+              pathlib.Path("data/interim/llm/nvidia_deepseek_v4_pro_rag_outputs.jsonl"),
+              pathlib.Path("data/interim/llm/nvidia_deepseek_v4_pro_rag_contexts.jsonl"),
+              pathlib.Path("reports/real_eval_10_nvidia_deepseek_v4_pro_report.md"),
+          ]
+          missing_paths = [str(path) for path in required_paths if not path.exists()]
+          if missing_paths:
+              print(f"::error::Missing expected LLM/report outputs: {missing_paths}")
+              raise SystemExit(1)
+
           raw_files = [
-              pathlib.Path("data/interim/llm/deepseek_v4_pro_no_rag_outputs.jsonl"),
-              pathlib.Path("data/interim/llm/deepseek_v4_pro_rag_outputs.jsonl"),
+              pathlib.Path("data/interim/llm/nvidia_deepseek_v4_pro_no_rag_outputs.jsonl"),
+              pathlib.Path("data/interim/llm/nvidia_deepseek_v4_pro_rag_outputs.jsonl"),
           ]
           rows = []
           for path in raw_files:
               if path.exists():
                   rows.extend(json.loads(line) for line in path.read_text(encoding="utf-8").splitlines() if line.strip())
           nonempty = sum(bool(r.get("raw_output")) for r in rows)
-          rag = pathlib.Path("data/interim/llm/deepseek_v4_pro_rag_contexts.jsonl")
+          rag = pathlib.Path("data/interim/llm/nvidia_deepseek_v4_pro_rag_contexts.jsonl")
           if not rag.exists():
               print("::error::RAG contexts were not written")
               raise SystemExit(1)
           if nonempty == 0:
-              print("::warning::DeepSeek API produced no raw outputs. This usually means DEEPSEEK_API_KEY is absent, the model name is unavailable, or the API returned an error.")
+              print("::warning::NVIDIA DeepSeek API produced no raw outputs. This usually means NVIDIA_API_KEY is absent, the model name is unavailable, rate limited, or the API returned an error.")
           else:
               parsed = sum(r.get("parse_failure") is False for r in rows)
-              print(f"DeepSeek raw outputs: {nonempty}/{len(rows)}; parsed: {parsed}")
+              print(f"NVIDIA DeepSeek raw outputs: {nonempty}/{len(rows)}; parsed: {parsed}")
           PY
-      - name: Upload real eval-10 DeepSeek outputs
+      - name: Upload real eval-10 NVIDIA DeepSeek outputs
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: herbarium-scribe-real-eval10-deepseek-${{ github.run_id }}
+          name: herbarium-scribe-real-eval10-nvidia-deepseek-${{ github.run_id }}
           retention-days: 30
           path: |
             data/processed/
