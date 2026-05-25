@@ -19,8 +19,24 @@ def test_nvidia_api_without_key_returns_empty(monkeypatch):
 
 def test_deepseek_api_without_key_returns_empty(monkeypatch):
     monkeypatch.delenv("DEEPSEEK_API_KEY", raising=False)
+    monkeypatch.delenv("DEEPSEEK_API_KEY_SELF", raising=False)
     cfg = {"llm": {"backend": "deepseek_api", "model_name": "deepseek-v4-pro"}}
     assert call_llm([{"role": "user", "content": "hello"}], cfg) == ""
+
+
+def test_deepseek_self_key_env_is_used(monkeypatch):
+    def fake_request(**kwargs):
+        return {"content": "{}", "actual_model": kwargs["model"], "error_message": "", "response": {}}
+
+    monkeypatch.delenv("DEEPSEEK_API_KEY", raising=False)
+    monkeypatch.setenv("DEEPSEEK_API_KEY_SELF", "test-key")
+    monkeypatch.setenv("DEEPSEEK_MODEL", "deepseek-v4-pro")
+    monkeypatch.setattr("herbarium_scribe.llm_backends._chat_completions_request", fake_request)
+    cfg = {"llm": {"backend": "deepseek_api", "model_name": "config/model"}}
+    out = call_llm_with_metadata([{"role": "user", "content": "hello"}], cfg)
+    assert out["api_key_present"] is True
+    assert out["requested_model"] == "deepseek-v4-pro"
+    assert out["actual_model"] == "deepseek-v4-pro"
 
 
 def test_nvidia_model_env_overrides_config(monkeypatch):

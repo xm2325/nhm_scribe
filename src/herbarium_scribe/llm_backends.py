@@ -118,12 +118,12 @@ def call_llm_with_metadata(messages: list[dict[str, str]], config: dict[str, Any
     if backend == "none":
         return base
     if backend in {"deepseek", "deepseek_api"}:
-        key = os.environ.get("DEEPSEEK_API_KEY")
+        key = os.environ.get("DEEPSEEK_API_KEY") or os.environ.get("DEEPSEEK_API_KEY_SELF")
         base_url = os.environ.get("DEEPSEEK_BASE_URL") or lcfg.get("base_url") or "https://api.deepseek.com"
         model = os.environ.get("DEEPSEEK_MODEL") or lcfg.get("model_name") or lcfg.get("model") or "deepseek-v4-pro"
         base.update({"requested_model": model, "api_key_present": bool(key), "base_url": base_url})
         if not key:
-            msg = "DEEPSEEK_API_KEY is not set; returning empty DeepSeek output."
+            msg = "DEEPSEEK_API_KEY or DEEPSEEK_API_KEY_SELF is not set; returning empty DeepSeek output."
             logger.warning(msg)
             base["error_message"] = msg
             return base

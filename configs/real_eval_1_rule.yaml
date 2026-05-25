@@ -2,7 +2,7 @@ extends: configs/real_eval_10_rule.yaml
 method_name: rule_ocr
 experiment:
   mode: real_image
-  title: Herbarium SCRIBE NVIDIA DeepSeek V4 Pro 1-Record Smoke Report
+  title: Herbarium SCRIBE 1-Record Real-Image Smoke Report
 sampling:
   demo_size: 1
   eval_size: 1
