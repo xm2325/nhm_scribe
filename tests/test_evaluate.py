@@ -1,6 +1,7 @@
 import pandas as pd
 
 from herbarium_scribe.evaluate import exact_match, token_f1, evidence_proxy, truthy_flag, assign_ocr_tertiles
+from herbarium_scribe.report import _rag_delta_tables
 
 
 def test_exact_match_normalises_case():
@@ -26,3 +27,27 @@ def test_assign_ocr_tertiles_handles_duplicate_quantile_edges():
     tertiles = assign_ocr_tertiles(scores)
     assert len(tertiles) == len(scores)
     assert set(tertiles).issubset({"low", "medium", "high"})
+
+
+def test_rag_delta_reports_no_rag_only(tmp_path):
+    processed = tmp_path / "processed"
+    processed.mkdir()
+    pd.DataFrame([
+        {
+            "occurrenceID": "eval:1",
+            "method": "deepseek_v4_pro_no_rag",
+            "field": "catalogNumber",
+            "exact_match": "",
+            "token_f1": "",
+            "evaluable": 0,
+            "not_evaluated": 1,
+            "parse_failure": 0,
+        }
+    ]).to_csv(processed / "real_eval_1_evaluation_detail.csv", index=False)
+    helped, hurt, verdict = _rag_delta_tables(
+        {"processed": processed},
+        {"method_name": "deepseek_v4_pro_no_rag", "outputs": {"prefix": "real_eval_1"}},
+    )
+    assert len(helped) == 0
+    assert len(hurt) == 0
+    assert "only no-RAG" in verdict

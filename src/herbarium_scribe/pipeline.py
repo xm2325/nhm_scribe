@@ -241,6 +241,11 @@ def stage_extract(config_path: str | Path) -> pd.DataFrame:
                 f.write(json.dumps({"occurrenceID": occ, "method": method_name, "backend": backend, "retrieved_context": retrieved}, ensure_ascii=False) + "\n")
             meta = call_llm_with_metadata(messages, cfg)
             raw = clean_str(meta.get("content", ""))
+            reasoning_content = clean_str(meta.get("reasoning_content", ""))
+            response_body = meta.get("response", {})
+            message_keys = meta.get("message_keys", [])
+            finish_reason = clean_str(meta.get("finish_reason", ""))
+            error_message = clean_str(meta.get("error_message", ""))
             with llm_jsonl.open("a", encoding="utf-8") as f:
                 f.write(json.dumps({
                     "occurrenceID": occ,
@@ -253,12 +258,19 @@ def stage_extract(config_path: str | Path) -> pd.DataFrame:
                     "retrieved_context": retrieved,
                     "raw_output": raw,
                     "raw_output_length": len(raw),
+                    "reasoning_content": reasoning_content,
+                    "reasoning_content_length": len(reasoning_content),
+                    "response_finish_reason": finish_reason,
+                    "response_message_keys": message_keys,
+                    "response_usage": meta.get("usage", {}),
+                    "response_body": response_body,
                     "parsed_json": None,
                     "parse_failure": None,
-                    "error_message": meta.get("error_message", ""),
+                    "error_message": error_message,
                 }, ensure_ascii=False) + "\n")
             obj = _parse_llm_json(raw)
-            not_evaluated = bool(meta.get("error_message", "")) and not raw
+            not_evaluated = not bool(raw)
+            not_evaluated_reason = error_message if error_message else ("empty_raw_output" if not raw else "")
             if obj is None:
                 obj = {}
                 parse_failure = bool(raw) and not not_evaluated
@@ -271,7 +283,7 @@ def stage_extract(config_path: str | Path) -> pd.DataFrame:
                 "method": method_name,
                 "parse_failure": parse_failure,
                 "not_evaluated": not_evaluated,
-                "not_evaluated_reason": meta.get("error_message", "") if not_evaluated else "",
+                "not_evaluated_reason": not_evaluated_reason if not_evaluated else "",
             })
             rows.append(llm_flat)
             # Rewrite the last JSONL line with parse details for easier artifact inspection.
@@ -280,6 +292,7 @@ def stage_extract(config_path: str | Path) -> pd.DataFrame:
             last["parsed_json"] = obj if obj else None
             last["parse_failure"] = parse_failure
             last["not_evaluated"] = not_evaluated
+            last["not_evaluated_reason"] = not_evaluated_reason if not_evaluated else ""
             raw_lines[-1] = json.dumps(last, ensure_ascii=False)
             llm_jsonl.write_text("\n".join(raw_lines) + "\n", encoding="utf-8")
             llm_diag_rows.append({
@@ -292,12 +305,18 @@ def stage_extract(config_path: str | Path) -> pd.DataFrame:
                 "actual_model_if_available": meta.get("actual_model", ""),
                 "endpoint_reachable": bool(meta.get("endpoint_reachable", False)),
                 "min_interval_seconds": meta.get("min_interval_seconds", 0.0),
+                "response_finish_reason": finish_reason,
+                "response_message_keys": json.dumps(message_keys, ensure_ascii=False),
+                "response_usage": json.dumps(meta.get("usage", {}), ensure_ascii=False),
+                "reasoning_content_length": len(reasoning_content),
+                "reasoning_content_nonempty": bool(reasoning_content),
                 "raw_output_length": len(raw),
                 "raw_output_nonempty": bool(raw),
                 "rag_context_count": len(retrieved),
                 "parse_failure": parse_failure,
                 "not_evaluated": not_evaluated,
-                "error_message": meta.get("error_message", ""),
+                "not_evaluated_reason": not_evaluated_reason if not_evaluated else "",
+                "error_message": error_message,
                 "status": "not_evaluated" if not_evaluated else ("parsed" if raw and not parse_failure else ("parse_failure" if raw else "empty_raw_output")),
             })
     out = pd.DataFrame(rows)
@@ -324,6 +343,8 @@ def stage_extract(config_path: str | Path) -> pd.DataFrame:
             "endpoint_reachable": bool(diag_df["endpoint_reachable"].any()),
             "raw_output_nonempty": int(diag_df["raw_output_nonempty"].sum()),
             "empty_raw_outputs": int((~diag_df["raw_output_nonempty"]).sum()),
+            "api_empty_responses": int(((~diag_df["raw_output_nonempty"]) & diag_df["endpoint_reachable"] & ~diag_df["not_evaluated_reason"].astype(str).str.contains("API_KEY|authentication_error|rate_limit|provider_error", case=False, na=False)).sum()),
+            "api_empty_response_rate": float(((~diag_df["raw_output_nonempty"]) & diag_df["endpoint_reachable"] & ~diag_df["not_evaluated_reason"].astype(str).str.contains("API_KEY|authentication_error|rate_limit|provider_error", case=False, na=False)).mean()),
             "parsed_records": int((diag_df["raw_output_nonempty"] & ~diag_df["parse_failure"] & ~diag_df["not_evaluated"]).sum()),
             "parse_failures": int(diag_df["parse_failure"].sum()),
             "not_evaluated": int(diag_df["not_evaluated"].sum()),

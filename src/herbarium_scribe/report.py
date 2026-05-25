@@ -59,11 +59,15 @@ def read_llm_diagnostics(paths: dict[str, Path], cfg: dict[str, Any] | None = No
                 "requested_model": item.get("requested_model", ""),
                 "actual_model_if_available": item.get("actual_model_if_available", ""),
                 "min_interval_seconds": item.get("min_interval_seconds", ""),
+                "response_finish_reason": item.get("response_finish_reason", ""),
+                "response_message_keys": item.get("response_message_keys", []),
+                "reasoning_content_length": item.get("reasoning_content_length", 0),
                 "raw_output_length": item.get("raw_output_length", len(str(item.get("raw_output", "")))),
                 "raw_output_nonempty": bool(item.get("raw_output", "")),
                 "rag_context_count": len(retrieved) if isinstance(retrieved, list) else 0,
                 "parse_failure": _truthy(item.get("parse_failure", False)),
                 "not_evaluated": _truthy(item.get("not_evaluated", False)),
+                "not_evaluated_reason": item.get("not_evaluated_reason", ""),
                 "error_message": item.get("error_message", ""),
                 "output_file": str(path),
             })
@@ -88,6 +92,9 @@ def read_llm_diagnostics(paths: dict[str, Path], cfg: dict[str, Any] | None = No
         ]
         if "min_interval_seconds" in diag.columns and "min_interval_seconds" not in detail.columns:
             enrich_cols.append("min_interval_seconds")
+        for col in ["response_finish_reason", "response_message_keys", "reasoning_content_length", "reasoning_content_nonempty", "not_evaluated_reason"]:
+            if col in diag.columns and col not in detail.columns:
+                enrich_cols.append(col)
         if {"occurrenceID", "method"}.issubset(set(enrich_cols)):
             detail = detail.merge(diag[enrich_cols], on=["occurrenceID", "method"], how="left")
             if "not_evaluated_diag" in detail.columns:
@@ -102,6 +109,7 @@ def read_llm_diagnostics(paths: dict[str, Path], cfg: dict[str, Any] | None = No
     actual_models = sorted(set(detail.get("actual_model_if_available", pd.Series(dtype=str)).dropna().astype(str)) - {""})
     requested_models = sorted(set(detail.get("requested_model", pd.Series(dtype=str)).dropna().astype(str)) - {""})
     backends = sorted(set(detail.get("backend", pd.Series(dtype=str)).dropna().astype(str)) - {""})
+    api_empty_responses = int((~detail["raw_output_nonempty"] & detail.get("endpoint_reachable", pd.Series(False, index=detail.index)).map(_truthy) & detail.get("not_evaluated_reason", pd.Series("", index=detail.index)).astype(str).eq("empty_raw_output")).sum()) if "raw_output_nonempty" in detail else 0
     summary = {
         "backend": ", ".join(backends),
         "requested_model": ", ".join(requested_models),
@@ -113,6 +121,8 @@ def read_llm_diagnostics(paths: dict[str, Path], cfg: dict[str, Any] | None = No
         "records": int(len(detail)),
         "raw_output_nonempty": int(detail["raw_output_nonempty"].sum()) if "raw_output_nonempty" in detail else 0,
         "empty_raw_outputs": int((~detail["raw_output_nonempty"]).sum()) if "raw_output_nonempty" in detail else 0,
+        "api_empty_responses": api_empty_responses,
+        "api_empty_response_rate": api_empty_responses / max(int(len(detail)), 1),
         "parsed_records": int((detail["raw_output_nonempty"] & ~detail["parse_failure"] & ~detail.get("not_evaluated", pd.Series(False, index=detail.index))).sum()) if {"raw_output_nonempty", "parse_failure"}.issubset(detail.columns) else 0,
         "parse_failures": int(detail["parse_failure"].sum()) if "parse_failure" in detail else 0,
         "not_evaluated": int(detail["not_evaluated"].sum()) if "not_evaluated" in detail else 0,
@@ -158,22 +168,31 @@ def _rag_delta_tables(paths: dict[str, Path], cfg: dict[str, Any]) -> tuple[pd.D
     if len(detail) == 0:
         return pd.DataFrame(), pd.DataFrame(), "RAG comparison unavailable because evaluation detail was not found."
     method = str(cfg.get("method_name", "") or "")
-    rag_method = method if method.endswith("_rag") else ""
+    rag_method = method if method.endswith("_rag") and not method.endswith("_no_rag") else ""
     no_rag_method = f"{rag_method[:-4]}_no_rag" if rag_method else ""
+    if method.endswith("_no_rag"):
+        no_rag_method = method
+        rag_method = f"{method[:-7]}_rag"
     if no_rag_method not in set(detail["method"]) or rag_method not in set(detail["method"]):
         methods = sorted(set(detail["method"].astype(str)) - {"rule_ocr"})
         no_rag_candidates = [item for item in methods if item.endswith("_no_rag")]
-        rag_candidates = [item for item in methods if item.endswith("_rag")]
+        rag_candidates = [item for item in methods if item.endswith("_rag") and not item.endswith("_no_rag")]
         no_rag_method = no_rag_candidates[0] if no_rag_candidates else no_rag_method
         rag_method = rag_candidates[0] if rag_candidates else rag_method
     no_rag = detail[detail["method"] == no_rag_method]
     rag = detail[detail["method"] == rag_method]
+    if len(no_rag) and len(rag) == 0:
+        return pd.DataFrame(), pd.DataFrame(), "RAG comparison unavailable because only no-RAG predictions were present; RAG was not run for this artifact."
+    if len(rag) and len(no_rag) == 0:
+        return pd.DataFrame(), pd.DataFrame(), "RAG comparison unavailable because only RAG predictions were present; no-RAG control was not run for this artifact."
     if len(no_rag) == 0 or len(rag) == 0:
         return pd.DataFrame(), pd.DataFrame(), "RAG comparison unavailable because both no-RAG and RAG LLM methods were not present."
     if pd.to_numeric(no_rag.get("not_evaluated", pd.Series(dtype=float)), errors="coerce").fillna(0).eq(1).all() and pd.to_numeric(rag.get("not_evaluated", pd.Series(dtype=float)), errors="coerce").fillna(0).eq(1).all():
         return pd.DataFrame(), pd.DataFrame(), "RAG comparison unavailable because the LLM methods were not evaluated, most likely because the API key was missing or rejected."
     if pd.to_numeric(no_rag.get("parse_failure", pd.Series(dtype=float)), errors="coerce").fillna(0).eq(1).all() and pd.to_numeric(rag.get("parse_failure", pd.Series(dtype=float)), errors="coerce").fillna(0).eq(1).all():
         return pd.DataFrame(), pd.DataFrame(), "RAG comparison unavailable because the LLM produced no parsed outputs for either no-RAG or RAG."
+    if pd.to_numeric(no_rag.get("evaluable", pd.Series(dtype=float)), errors="coerce").fillna(0).sum() == 0 or pd.to_numeric(rag.get("evaluable", pd.Series(dtype=float)), errors="coerce").fillna(0).sum() == 0:
+        return pd.DataFrame(), pd.DataFrame(), "RAG comparison unavailable because no-RAG and RAG did not both produce evaluable parsed outputs."
     cols = ["occurrenceID", "field", "exact_match", "token_f1"]
     merged = no_rag[cols].merge(rag[cols], on=["occurrenceID", "field"], suffixes=("_no_rag", "_rag"))
     for col in ["exact_match_no_rag", "exact_match_rag", "token_f1_no_rag", "token_f1_rag"]:
@@ -282,6 +301,8 @@ def write_report(cfg: dict[str, Any], split_summary: pd.DataFrame, eval_summary:
         lines.append(f"- LLM records attempted: `{llm_summary.get('records', 0)}`\n")
         lines.append(f"- Non-empty raw outputs: `{llm_summary.get('raw_output_nonempty', 0)}`\n")
         lines.append(f"- Empty raw outputs / likely API failures: `{llm_summary.get('empty_raw_outputs', 0)}`\n")
+        lines.append(f"- API empty responses: `{llm_summary.get('api_empty_responses', 0)}`\n")
+        lines.append(f"- API empty response rate: `{llm_summary.get('api_empty_response_rate', 0)}`\n")
         lines.append(f"- Parsed records: `{llm_summary.get('parsed_records', 0)}`\n")
         lines.append(f"- Parse failures: `{llm_summary.get('parse_failures', 0)}`\n")
         lines.append(f"- Not evaluated: `{llm_summary.get('not_evaluated', 0)}`\n")

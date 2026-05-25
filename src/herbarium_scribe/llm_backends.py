@@ -79,9 +79,19 @@ def _chat_completions_request(
         try:
             with urllib.request.urlopen(req, timeout=timeout_seconds) as resp:
                 body = json.loads(resp.read().decode("utf-8"))
+            choices = body.get("choices", [])
+            choice = choices[0] if choices else {}
+            message = choice.get("message", {}) if isinstance(choice, dict) else {}
+            if not isinstance(message, dict):
+                message = {}
             return {
-                "content": body.get("choices", [{}])[0].get("message", {}).get("content", "") or "",
+                "content": message.get("content", "") or "",
                 "actual_model": body.get("model", ""),
+                "finish_reason": choice.get("finish_reason", "") if isinstance(choice, dict) else "",
+                "message": message,
+                "message_keys": sorted(str(key) for key in message.keys()),
+                "reasoning_content": message.get("reasoning_content", "") or "",
+                "usage": body.get("usage", {}),
                 "error_message": "",
                 "response": body,
             }
