@@ -8,7 +8,7 @@ llm:
   base_url: https://api.deepseek.com
   model_name: deepseek-v4-pro
   temperature: 0.0
-  max_tokens: 6000
+  max_tokens: 12000
   timeout_seconds: 300
   retries: 3
   retry_backoff_seconds: 20
