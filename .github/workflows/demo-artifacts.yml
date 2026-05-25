@@ -53,13 +53,13 @@ jobs:
           mkdir -p data/processed data/interim/ocr data/interim/llm reports
           if [ -z "${NVIDIA_API_KEY}${NGC_API_KEY}" ]; then
             echo "enabled=false" >> "$GITHUB_OUTPUT"
-            cat > reports/deepseek_rag_not_run.md <<'EOF'
-# DeepSeek v4 Pro + RAG pipeline not run
-
-The DeepSeek v4 Pro + RAG artifact job requires a repository secret named `NVIDIA_API_KEY` or `NGC_API_KEY`.
-
-Add the secret in GitHub under Settings -> Secrets and variables -> Actions, then re-run the `demo artifacts` workflow.
-EOF
+            printf '%s\n' \
+              '# DeepSeek v4 Pro + RAG pipeline not run' \
+              '' \
+              'The DeepSeek v4 Pro + RAG artifact job requires a repository secret named `NVIDIA_API_KEY` or `NGC_API_KEY`.' \
+              '' \
+              'Add the secret in GitHub under Settings -> Secrets and variables -> Actions, then re-run the `demo artifacts` workflow.' \
+              > reports/deepseek_rag_not_run.md
           else
             echo "enabled=true" >> "$GITHUB_OUTPUT"
           fi
