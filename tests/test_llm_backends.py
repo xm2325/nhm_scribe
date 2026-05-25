@@ -1,4 +1,6 @@
-from herbarium_scribe.llm_backends import call_llm, call_llm_with_metadata, _provider_http_error
+import urllib.error
+
+from herbarium_scribe.llm_backends import call_llm, call_llm_with_metadata, _chat_completions_request, _provider_http_error
 
 
 def test_qwen_api_without_key_returns_empty(monkeypatch):
@@ -51,3 +53,40 @@ def test_provider_http_error_does_not_include_key_fragments():
     msg = _provider_http_error("NVIDIA", 401)
     assert "authentication_error" in msg
     assert "nvapi" not in msg.lower()
+
+
+def test_chat_completions_retries_429_with_retry_after(monkeypatch):
+    calls = []
+    sleeps = []
+
+    class Response:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return None
+
+        def read(self):
+            return b'{"model":"test-model","choices":[{"message":{"content":"{}"}}]}'
+
+    def fake_urlopen(req, timeout):
+        calls.append((req, timeout))
+        if len(calls) == 1:
+            raise urllib.error.HTTPError(req.full_url, 429, "rate limited", {"Retry-After": "3"}, None)
+        return Response()
+
+    monkeypatch.setattr("urllib.request.urlopen", fake_urlopen)
+    monkeypatch.setattr("time.sleep", lambda seconds: sleeps.append(seconds))
+
+    result = _chat_completions_request(
+        base_url="https://example.test/v1",
+        api_key="test-key",
+        model="test-model",
+        messages=[{"role": "user", "content": "hello"}],
+        retries=1,
+        retry_backoff_seconds=60,
+    )
+
+    assert len(calls) == 2
+    assert sleeps == [3.0]
+    assert result["content"] == "{}"

@@ -1,0 +1,117 @@
+name: NVIDIA DeepSeek smoke artifacts
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  nvidia-smoke-artifacts:
+    if: ${{ github.event_name == 'workflow_dispatch' || contains(github.event.head_commit.message, '[run-nvidia-smoke]') }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install OCR system dependency
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y tesseract-ocr
+      - name: Install package
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -e '.[dev]'
+      - name: Check NVIDIA API configuration
+        env:
+          NVIDIA_API_KEY: ${{ secrets.NVIDIA_API_KEY }}
+          NGC_API_KEY: ${{ secrets.NGC_API_KEY }}
+        run: |
+          mkdir -p data/processed data/interim/ocr data/interim/llm reports
+          if [ -z "${NVIDIA_API_KEY}${NGC_API_KEY}" ]; then
+            printf '%s\n' \
+              '# NVIDIA DeepSeek V4 Pro API key not configured' \
+              '' \
+              'The smoke job will still run rule_ocr and produce diagnostics, but NVIDIA DeepSeek methods will be marked not evaluated.' \
+              '' \
+              'Add a repository secret named `NVIDIA_API_KEY` or `NGC_API_KEY` to run the NVIDIA Build DeepSeek path.' \
+              > reports/nvidia_api_key_not_configured.md
+          fi
+      - name: Run tests
+        run: python -m pytest
+      - name: Run real eval-1 rule baseline
+        run: python scripts/run_pipeline.py --config configs/real_eval_1_rule.yaml
+      - name: Run real eval-1 NVIDIA DeepSeek no-RAG smoke
+        env:
+          NVIDIA_API_KEY: ${{ secrets.NVIDIA_API_KEY }}
+          NGC_API_KEY: ${{ secrets.NGC_API_KEY }}
+          NVIDIA_BASE_URL: https://integrate.api.nvidia.com/v1
+          NVIDIA_MODEL: deepseek-ai/deepseek-v4-pro
+          NVIDIA_MIN_INTERVAL_SECONDS: "65"
+        run: python scripts/run_pipeline.py --config configs/real_eval_1_nvidia_deepseek_no_rag.yaml
+      - name: Inspect no-RAG smoke output
+        id: inspect-no-rag
+        run: |
+          python - <<'PY'
+          import json
+          import os
+          import pathlib
+          import pandas as pd
+
+          processed = pathlib.Path("data/processed")
+          eval_set = pd.read_csv(processed / "real_eval_1_eval_set.csv")
+          if len(eval_set) != 1:
+              print(f"::error::Expected exactly 1 EVAL record, got {len(eval_set)}")
+              raise SystemExit(1)
+
+          path = pathlib.Path("data/interim/llm/nvidia_deepseek_v4_pro_eval1_no_rag_outputs.jsonl")
+          rows = [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines() if line.strip()] if path.exists() else []
+          nonempty = sum(bool(row.get("raw_output")) for row in rows)
+          parsed = sum(bool(row.get("raw_output")) and row.get("parse_failure") is False and not row.get("not_evaluated") for row in rows)
+          print(f"NVIDIA DeepSeek no-RAG smoke raw outputs: {nonempty}/{len(rows)}; parsed: {parsed}")
+
+          with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as fh:
+              fh.write(f"nonempty={nonempty}\n")
+              fh.write(f"parsed={parsed}\n")
+              fh.write(f"run_rag={'true' if parsed > 0 else 'false'}\n")
+
+          if nonempty == 0:
+              print("::warning::No NVIDIA no-RAG raw output. RAG smoke will be skipped.")
+          elif parsed == 0:
+              print("::warning::NVIDIA no-RAG returned raw output but it did not parse. RAG smoke will be skipped.")
+          PY
+      - name: Cool down before RAG smoke
+        if: ${{ steps.inspect-no-rag.outputs.run_rag == 'true' }}
+        run: sleep 90
+      - name: Run real eval-1 NVIDIA DeepSeek RAG smoke
+        if: ${{ steps.inspect-no-rag.outputs.run_rag == 'true' }}
+        env:
+          NVIDIA_API_KEY: ${{ secrets.NVIDIA_API_KEY }}
+          NGC_API_KEY: ${{ secrets.NGC_API_KEY }}
+          NVIDIA_BASE_URL: https://integrate.api.nvidia.com/v1
+          NVIDIA_MODEL: deepseek-ai/deepseek-v4-pro
+          NVIDIA_MIN_INTERVAL_SECONDS: "65"
+        run: python scripts/run_pipeline.py --config configs/real_eval_1_nvidia_deepseek_rag.yaml
+      - name: Write RAG skipped note
+        if: ${{ steps.inspect-no-rag.outputs.run_rag != 'true' }}
+        run: |
+          printf '%s\n' \
+            '# NVIDIA RAG smoke skipped' \
+            '' \
+            'The no-RAG smoke did not produce a parsed NVIDIA output, so RAG was intentionally skipped to avoid spending more rate limit budget.' \
+            '' \
+            "No-RAG non-empty raw outputs: ${{ steps.inspect-no-rag.outputs.nonempty }}" \
+            "No-RAG parsed outputs: ${{ steps.inspect-no-rag.outputs.parsed }}" \
+            > reports/nvidia_rag_smoke_skipped.md
+      - name: Upload NVIDIA DeepSeek smoke outputs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: herbarium-scribe-nvidia-smoke-${{ github.run_id }}
+          retention-days: 30
+          path: |
+            data/processed/
+            data/interim/ocr/
+            data/interim/llm/
+            reports/

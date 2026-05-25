@@ -38,6 +38,15 @@ def _apply_request_spacing(bucket: str, min_interval_seconds: float) -> None:
     _LAST_REQUEST_AT[bucket] = time.monotonic()
 
 
+def _retry_delay_seconds(error: urllib.error.HTTPError | None, attempt: int, retry_backoff_seconds: float) -> float:
+    headers = getattr(error, "headers", {}) or {}
+    retry_after = headers.get("Retry-After") if hasattr(headers, "get") else None
+    retry_after_seconds = _float_value(retry_after, -1.0)
+    if retry_after_seconds >= 0:
+        return retry_after_seconds
+    return min(retry_backoff_seconds * (attempt + 1), 120.0)
+
+
 def _chat_completions_request(
     *,
     base_url: str,
@@ -78,15 +87,17 @@ def _chat_completions_request(
             }
         except urllib.error.HTTPError as e:
             if e.code == 429 and attempt < retries:
-                logger.warning("Chat completions request hit rate limit on attempt %s; retrying.", attempt + 1)
-                time.sleep(retry_backoff_seconds)
+                delay = _retry_delay_seconds(e, attempt, retry_backoff_seconds)
+                logger.warning("Chat completions request hit rate limit on attempt %s; retrying after %.1fs.", attempt + 1, delay)
+                time.sleep(delay)
                 continue
             raise
         except Exception:
             if attempt >= retries:
                 raise
-            logger.warning("Chat completions request failed on attempt %s; retrying.", attempt + 1)
-            time.sleep(retry_backoff_seconds)
+            delay = _retry_delay_seconds(None, attempt, retry_backoff_seconds)
+            logger.warning("Chat completions request failed on attempt %s; retrying after %.1fs.", attempt + 1, delay)
+            time.sleep(delay)
     return {"content": "", "actual_model": "", "error_message": "empty_response", "response": {}}
 
 

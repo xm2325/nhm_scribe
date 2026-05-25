@@ -1,0 +1,17 @@
+extends: configs/real_eval_10_rule.yaml
+method_name: rule_ocr
+experiment:
+  mode: real_image
+  title: Herbarium SCRIBE NVIDIA DeepSeek V4 Pro 1-Record Smoke Report
+sampling:
+  demo_size: 1
+  eval_size: 1
+  stratify_by: institutionCode
+  prefer_institution_disjoint: true
+image:
+  allow_download: true
+  output_subdir: real_eval_1
+  timeout_seconds: 60
+outputs:
+  prefix: real_eval_1
+  prediction_name: rule
