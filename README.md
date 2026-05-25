@@ -67,6 +67,8 @@ python scripts/run_pipeline.py --config configs/deepseek_rag_demo.yaml
 
 The DeepSeek job writes `nvidia_api_rag` rows into `data/processed/extractions_flat.csv`, saves raw model responses in `data/interim/llm/raw_llm_outputs.jsonl`, saves retrieved RAG context in `data/interim/llm/rag_contexts.jsonl`, and uploads those files in the `herbarium-scribe-deepseek-rag-*` artifact. The call uses NVIDIA's OpenAI-compatible endpoint, `https://integrate.api.nvidia.com/v1`, with model `deepseek-ai/deepseek-v4-pro`.
 
+NVIDIA hosted endpoints can return `429 Too Many Requests` under free-tier or burst limits. When that happens, the workflow still uploads diagnostics and RAG context so the artifact can distinguish API availability from extraction quality.
+
 ## Running the 50-record evaluation
 
 ```bash

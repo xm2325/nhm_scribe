@@ -76,7 +76,25 @@ jobs:
       - name: Verify DeepSeek v4 Pro + RAG outputs
         if: steps.nvidia-key.outputs.enabled == 'true'
         run: |
-          python -c "import json, pathlib; raw=pathlib.Path('data/interim/llm/raw_llm_outputs.jsonl'); rows=[json.loads(line) for line in raw.read_text(encoding='utf-8').splitlines() if line.strip()]; assert any(r.get('raw_output') for r in rows), 'NVIDIA DeepSeek API produced no raw outputs'; assert pathlib.Path('data/interim/llm/rag_contexts.jsonl').exists(), 'RAG contexts were not written'"
+          python - <<'PY'
+          import json
+          import pathlib
+
+          raw = pathlib.Path("data/interim/llm/raw_llm_outputs.jsonl")
+          rag = pathlib.Path("data/interim/llm/rag_contexts.jsonl")
+          diag = pathlib.Path("data/processed/llm_diagnostics.json")
+          rows = [json.loads(line) for line in raw.read_text(encoding="utf-8").splitlines() if line.strip()] if raw.exists() else []
+          nonempty = sum(bool(r.get("raw_output")) for r in rows)
+          if not rag.exists():
+              print("::error::RAG contexts were not written")
+              raise SystemExit(1)
+          if nonempty == 0:
+              detail = diag.read_text(encoding="utf-8") if diag.exists() else "{}"
+              print("::warning::NVIDIA DeepSeek API produced no raw outputs. This is usually an API rate limit, quota, timeout, or service issue. Diagnostics follow.")
+              print(detail)
+          else:
+              print(f"DeepSeek raw outputs: {nonempty}/{len(rows)}")
+          PY
       - name: Upload DeepSeek v4 Pro + RAG outputs
         if: always()
         uses: actions/upload-artifact@v4

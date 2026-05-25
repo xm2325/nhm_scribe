@@ -45,6 +45,12 @@ def _chat_completions_request(
             with urllib.request.urlopen(req, timeout=timeout_seconds) as resp:
                 body = json.loads(resp.read().decode("utf-8"))
             return body.get("choices", [{}])[0].get("message", {}).get("content", "") or ""
+        except urllib.error.HTTPError as e:
+            if e.code == 429 and attempt < retries:
+                logger.warning("Chat completions request hit rate limit on attempt %s; retrying.", attempt + 1)
+                time.sleep(retry_backoff_seconds)
+                continue
+            raise
         except Exception:
             if attempt >= retries:
                 raise
