@@ -183,7 +183,7 @@ jobs:
 
       - name: Check DeepSeek official API configuration
         env:
-          DEEPSEEK_API_KEY: ${{ secrets.DEEPSEEK_API_KEY }}
+          DEEPSEEK_API_KEY: ${{ secrets.DEEPSEEK_API_KEY_SELF }}
           DEEPSEEK_BASE_URL: https://api.deepseek.com
           DEEPSEEK_MODEL: deepseek-v4-pro
         run: |
@@ -202,14 +202,14 @@ jobs:
 
       - name: Run real eval-10 DeepSeek official no-RAG pipeline
         env:
-          DEEPSEEK_API_KEY: ${{ secrets.DEEPSEEK_API_KEY }}
+          DEEPSEEK_API_KEY: ${{ secrets.DEEPSEEK_API_KEY_SELF }}
           DEEPSEEK_BASE_URL: https://api.deepseek.com
           DEEPSEEK_MODEL: deepseek-v4-pro
         run: python scripts/run_pipeline.py --config configs/real_eval_10_deepseek_no_rag.yaml
 
       - name: Run real eval-10 DeepSeek official RAG pipeline
         env:
-          DEEPSEEK_API_KEY: ${{ secrets.DEEPSEEK_API_KEY }}
+          DEEPSEEK_API_KEY: ${{ secrets.DEEPSEEK_API_KEY_SELF }}
           DEEPSEEK_BASE_URL: https://api.deepseek.com
           DEEPSEEK_MODEL: deepseek-v4-pro
         run: python scripts/run_pipeline.py --config configs/real_eval_10_deepseek_rag.yaml
