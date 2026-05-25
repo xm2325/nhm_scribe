@@ -53,6 +53,26 @@ def evidence_proxy(value: str, ocr_text: str) -> float | None:
     return len(vt & tt) / len(vt) if vt else None
 
 
+def truthy_flag(value: Any) -> bool:
+    if isinstance(value, bool):
+        return value
+    if value is None:
+        return False
+    try:
+        if pd.isna(value):
+            return False
+    except Exception:
+        pass
+    if isinstance(value, (int, float)):
+        return bool(value)
+    text = clean_str(value).lower()
+    if text in {"", "0", "false", "f", "no", "n", "none", "nan"}:
+        return False
+    if text in {"1", "true", "t", "yes", "y"}:
+        return True
+    return bool(text)
+
+
 def assign_ocr_tertiles(scores: pd.Series) -> pd.Series:
     filled = scores.fillna(0.0)
     if filled.nunique() < 3:
@@ -93,7 +113,7 @@ def evaluate_predictions(pred_df: pd.DataFrame, gold_df: pd.DataFrame, ocr_df: p
                 "exact_match": exact_match(pred_val, gold_val) if gold_val else np.nan,
                 "token_f1": token_f1(pred_val, gold_val) if gold_val else np.nan,
                 "validation_warning": int(bool(clean_str(prow.get("validation_warnings", "")))),
-                "parse_failure": int(bool(prow.get("parse_failure", False))),
+                "parse_failure": int(truthy_flag(prow.get("parse_failure", False))),
                 "ocr_quality_tertile": proxy_map.get(occ, {}).get("ocr_quality_tertile", "unknown"),
                 "ocr_evidence_proxy_score": proxy_map.get(occ, {}).get("ocr_evidence_proxy_score", np.nan),
             })

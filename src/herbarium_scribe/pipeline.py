@@ -14,7 +14,7 @@ from .download import run_download
 from .layout import detect_layout
 from .ocr import run_ocr
 from .extract_rules import extract_rule_based
-from .schema import flatten_record
+from .schema import EXTRACTION_FIELDS, flatten_record, validate_record
 from .llm_backends import call_llm
 from .rag import build_rag_corpus, retrieve_context, format_context_for_prompt
 from .reconcile import reconcile_dataframe
@@ -84,20 +84,84 @@ def stage_ocr(config_path: str | Path) -> pd.DataFrame:
     return run_ocr(layout_df, cfg, paths)
 
 
+FIELD_ALIASES = {
+    "catalog_number": "catalogNumber",
+    "catalog_no": "catalogNumber",
+    "barcode": "catalogNumber",
+    "scientific_name": "scientificName",
+    "taxon": "scientificName",
+    "recorded_by": "recordedBy",
+    "collector": "recordedBy",
+    "event_date": "eventDate",
+    "collection_date": "eventDate",
+    "state_province": "stateProvince",
+    "state": "stateProvince",
+    "province": "stateProvince",
+    "decimal_latitude": "decimalLatitude",
+    "latitude": "decimalLatitude",
+    "decimal_longitude": "decimalLongitude",
+    "longitude": "decimalLongitude",
+    "type_status": "typeStatus",
+}
+
+
+def _strip_json_fence(text: str) -> str:
+    text = clean_str(text)
+    if text.startswith("```"):
+        lines = text.splitlines()
+        if lines and lines[0].startswith("```"):
+            lines = lines[1:]
+        if lines and lines[-1].startswith("```"):
+            lines = lines[:-1]
+        return "\n".join(lines).strip()
+    return text
+
+
+def _normalise_field_item(item: Any) -> Any:
+    if not isinstance(item, dict):
+        return item
+    if "value" in item:
+        return item
+    for key in ["text", "answer", "extracted_value", "verbatim", "prediction"]:
+        if key in item:
+            return {
+                "value": item.get(key, ""),
+                "confidence": item.get("confidence", 0.5),
+                "evidence_span": item.get("evidence_span", item.get(key, "")),
+            }
+    return item
+
+
+def _normalise_llm_record(obj: Any) -> dict[str, Any] | None:
+    if isinstance(obj, list) and len(obj) == 1:
+        obj = obj[0]
+    if not isinstance(obj, dict):
+        return None
+    for key in ["record", "fields", "extraction", "extracted_record", "data", "result"]:
+        if isinstance(obj.get(key), dict):
+            obj = obj[key]
+            break
+    normalised: dict[str, Any] = {}
+    for key, value in obj.items():
+        canonical = FIELD_ALIASES.get(str(key), FIELD_ALIASES.get(str(key).lower(), str(key)))
+        normalised[canonical] = _normalise_field_item(value)
+    if not any(field in normalised for field in EXTRACTION_FIELDS):
+        return None
+    return normalised
+
+
 def _parse_llm_json(text: str) -> dict[str, Any] | None:
     text = clean_str(text)
     if not text:
         return None
-    text = text.replace("```json", "```").strip()
-    if text.startswith("```") and text.endswith("```"):
-        text = text[3:-3].strip()
+    text = _strip_json_fence(text.replace("```json", "```"))
     try:
-        return json.loads(text)
+        return _normalise_llm_record(json.loads(text))
     except Exception:
         start, end = text.find("{"), text.rfind("}")
         if start >= 0 and end > start:
             try:
-                return json.loads(text[start:end + 1])
+                return _normalise_llm_record(json.loads(text[start:end + 1]))
             except Exception:
                 return None
     return None
@@ -113,12 +177,19 @@ def stage_extract(config_path: str | Path) -> pd.DataFrame:
     demo_df = _read_demo(paths)
     corpus = build_rag_corpus(demo_df if cfg.get("rag", {}).get("use_demo_examples", True) else None)
     rows = []
+    llm_diag_rows = []
     llm_jsonl = paths["llm"] / "raw_llm_outputs.jsonl"
     rag_jsonl = paths["llm"] / "rag_contexts.jsonl"
+    diag_json = paths["processed"] / "llm_diagnostics.json"
+    diag_csv = paths["processed"] / "llm_diagnostics.csv"
     if llm_jsonl.exists():
         llm_jsonl.unlink()
     if rag_jsonl.exists():
         rag_jsonl.unlink()
+    if diag_json.exists():
+        diag_json.unlink()
+    if diag_csv.exists():
+        diag_csv.unlink()
     for _, gold in eval_df.iterrows():
         occ = clean_str(gold.get("occurrenceID"))
         text = ocr_combined.get(occ, "")
@@ -145,15 +216,39 @@ def stage_extract(config_path: str | Path) -> pd.DataFrame:
                 parse_failure = True
             else:
                 parse_failure = False
-            from .schema import validate_record
             llm_rec = validate_record(obj)
             llm_flat = flatten_record(llm_rec)
             llm_flat.update({"occurrenceID": occ, "method": f"{backend}_rag", "parse_failure": parse_failure})
             rows.append(llm_flat)
+            llm_diag_rows.append({
+                "occurrenceID": occ,
+                "backend": backend,
+                "method": f"{backend}_rag",
+                "raw_output_length": len(raw),
+                "raw_output_nonempty": bool(raw),
+                "rag_context_count": len(retrieved),
+                "parse_failure": parse_failure,
+                "status": "parsed" if raw and not parse_failure else ("parse_failure" if raw else "empty_raw_output"),
+            })
     out = pd.DataFrame(rows)
     out = out.merge(eval_df[["occurrenceID", "institutionCode"]], on="occurrenceID", how="left")
     out.to_json(paths["processed"] / "extractions.jsonl", orient="records", lines=True, force_ascii=False)
     out.to_csv(paths["processed"] / "extractions_flat.csv", index=False)
+    if llm_diag_rows:
+        diag_df = pd.DataFrame(llm_diag_rows)
+        diag_df.to_csv(diag_csv, index=False)
+        summary = {
+            "backend": backend,
+            "records": int(len(diag_df)),
+            "raw_output_nonempty": int(diag_df["raw_output_nonempty"].sum()),
+            "empty_raw_outputs": int((~diag_df["raw_output_nonempty"]).sum()),
+            "parsed_records": int((~diag_df["parse_failure"]).sum()),
+            "parse_failures": int(diag_df["parse_failure"].sum()),
+            "rag_context_rows": int(len(diag_df)),
+            "rag_contexts_path": str(rag_jsonl),
+            "raw_outputs_path": str(llm_jsonl),
+        }
+        diag_json.write_text(json.dumps(summary, indent=2), encoding="utf-8")
     return out
 
 

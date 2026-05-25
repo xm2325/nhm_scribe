@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import time
 import urllib.error
 import urllib.request
 from typing import Any
@@ -20,6 +21,8 @@ def _chat_completions_request(
     temperature: float = 0.0,
     max_tokens: int = 1200,
     timeout_seconds: int = 60,
+    retries: int = 0,
+    retry_backoff_seconds: float = 2.0,
 ) -> str:
     url = base_url.rstrip("/") + "/chat/completions"
     payload = {
@@ -37,9 +40,17 @@ def _chat_completions_request(
         },
         method="POST",
     )
-    with urllib.request.urlopen(req, timeout=timeout_seconds) as resp:
-        body = json.loads(resp.read().decode("utf-8"))
-    return body.get("choices", [{}])[0].get("message", {}).get("content", "") or ""
+    for attempt in range(max(0, retries) + 1):
+        try:
+            with urllib.request.urlopen(req, timeout=timeout_seconds) as resp:
+                body = json.loads(resp.read().decode("utf-8"))
+            return body.get("choices", [{}])[0].get("message", {}).get("content", "") or ""
+        except Exception:
+            if attempt >= retries:
+                raise
+            logger.warning("Chat completions request failed on attempt %s; retrying.", attempt + 1)
+            time.sleep(retry_backoff_seconds)
+    return ""
 
 
 def call_llm(messages: list[dict[str, str]], config: dict[str, Any]) -> str:
@@ -61,6 +72,8 @@ def call_llm(messages: list[dict[str, str]], config: dict[str, Any]) -> str:
                 temperature=float(lcfg.get("temperature", 0.0)),
                 max_tokens=int(lcfg.get("max_tokens", 1600)),
                 timeout_seconds=int(lcfg.get("timeout_seconds", 90)),
+                retries=int(lcfg.get("retries", 0)),
+                retry_backoff_seconds=float(lcfg.get("retry_backoff_seconds", 2.0)),
             )
         except urllib.error.HTTPError as e:
             detail = e.read().decode("utf-8", errors="replace")
@@ -83,6 +96,8 @@ def call_llm(messages: list[dict[str, str]], config: dict[str, Any]) -> str:
                 temperature=float(lcfg.get("temperature", 0.0)),
                 max_tokens=int(lcfg.get("max_tokens", 1200)),
                 timeout_seconds=int(lcfg.get("timeout_seconds", 60)),
+                retries=int(lcfg.get("retries", 0)),
+                retry_backoff_seconds=float(lcfg.get("retry_backoff_seconds", 2.0)),
             )
         except urllib.error.HTTPError as e:
             detail = e.read().decode("utf-8", errors="replace")
