@@ -34,6 +34,19 @@ def test_nvidia_model_env_overrides_config(monkeypatch):
     assert out["actual_model"] == "env/model"
 
 
+def test_nvidia_min_interval_env_is_reported(monkeypatch):
+    def fake_request(**kwargs):
+        return {"content": "{}", "actual_model": kwargs["model"], "error_message": "", "response": {}}
+
+    monkeypatch.setenv("NVIDIA_API_KEY", "test-key")
+    monkeypatch.setenv("NVIDIA_MODEL", "env/rate-limit-model")
+    monkeypatch.setenv("NVIDIA_MIN_INTERVAL_SECONDS", "2.5")
+    monkeypatch.setattr("herbarium_scribe.llm_backends._chat_completions_request", fake_request)
+    cfg = {"llm": {"backend": "nvidia_api", "model_name": "config/model"}}
+    out = call_llm_with_metadata([{"role": "user", "content": "hello"}], cfg)
+    assert out["min_interval_seconds"] == 2.5
+
+
 def test_provider_http_error_does_not_include_key_fragments():
     msg = _provider_http_error("NVIDIA", 401)
     assert "authentication_error" in msg

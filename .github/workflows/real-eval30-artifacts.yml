@@ -1,0 +1,123 @@
+name: real eval30 artifacts
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  real-eval30-artifacts:
+    if: ${{ github.event_name == 'workflow_dispatch' || contains(github.event.head_commit.message, '[run-eval30]') }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install OCR system dependency
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y tesseract-ocr
+      - name: Install package
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -e '.[dev]'
+      - name: Check NVIDIA API configuration
+        env:
+          NVIDIA_API_KEY: ${{ secrets.NVIDIA_API_KEY }}
+          NGC_API_KEY: ${{ secrets.NGC_API_KEY }}
+          NVIDIA_BASE_URL: https://integrate.api.nvidia.com/v1
+          NVIDIA_MODEL: deepseek-ai/deepseek-v4-pro
+          NVIDIA_MIN_INTERVAL_SECONDS: "2.0"
+        run: |
+          mkdir -p data/processed data/interim/ocr data/interim/llm reports
+          if [ -z "${NVIDIA_API_KEY}${NGC_API_KEY}" ]; then
+            printf '%s\n' \
+              '# NVIDIA DeepSeek V4 Pro API key not configured' \
+              '' \
+              'The real eval-30 job will still run rule_ocr and produce diagnostics, but NVIDIA DeepSeek methods will be marked not evaluated.' \
+              '' \
+              'Add a repository secret named `NVIDIA_API_KEY` or `NGC_API_KEY` to run the NVIDIA Build DeepSeek path.' \
+              > reports/nvidia_api_key_not_configured.md
+          fi
+      - name: Run tests
+        run: python -m pytest
+      - name: Run real eval-30 rule baseline
+        run: python scripts/run_pipeline.py --config configs/real_eval_30_rule.yaml
+      - name: Run real eval-30 NVIDIA DeepSeek no-RAG pipeline
+        env:
+          NVIDIA_API_KEY: ${{ secrets.NVIDIA_API_KEY }}
+          NGC_API_KEY: ${{ secrets.NGC_API_KEY }}
+          NVIDIA_BASE_URL: https://integrate.api.nvidia.com/v1
+          NVIDIA_MODEL: deepseek-ai/deepseek-v4-pro
+          NVIDIA_MIN_INTERVAL_SECONDS: "2.0"
+        run: python scripts/run_pipeline.py --config configs/real_eval_30_nvidia_deepseek_no_rag.yaml
+      - name: Run real eval-30 NVIDIA DeepSeek RAG pipeline
+        env:
+          NVIDIA_API_KEY: ${{ secrets.NVIDIA_API_KEY }}
+          NGC_API_KEY: ${{ secrets.NGC_API_KEY }}
+          NVIDIA_BASE_URL: https://integrate.api.nvidia.com/v1
+          NVIDIA_MODEL: deepseek-ai/deepseek-v4-pro
+          NVIDIA_MIN_INTERVAL_SECONDS: "2.0"
+        run: python scripts/run_pipeline.py --config configs/real_eval_30_nvidia_deepseek_rag.yaml
+      - name: Verify real eval-30 outputs
+        run: |
+          python - <<'PY'
+          import json
+          import pathlib
+          import pandas as pd
+
+          processed = pathlib.Path("data/processed")
+          eval_set = pd.read_csv(processed / "real_eval_30_eval_set.csv")
+          if len(eval_set) < 30:
+              print(f"::error::Expected at least 30 EVAL records, got {len(eval_set)}")
+              raise SystemExit(1)
+
+          required = [
+              "real_eval_30_image_manifest.csv",
+              "real_eval_30_ocr_by_region.csv",
+              "real_eval_30_predictions_rule.csv",
+              "real_eval_30_predictions_nvidia_deepseek_no_rag.csv",
+              "real_eval_30_predictions_nvidia_deepseek_rag.csv",
+              "real_eval_30_evaluation_summary.csv",
+              "real_eval_30_evaluation_by_ocr_tertile.csv",
+          ]
+          missing = [name for name in required if not (processed / name).exists()]
+          if missing:
+              print(f"::error::Missing expected outputs: {missing}")
+              raise SystemExit(1)
+
+          required_paths = [
+              pathlib.Path("data/interim/llm/nvidia_deepseek_v4_pro_eval30_no_rag_outputs.jsonl"),
+              pathlib.Path("data/interim/llm/nvidia_deepseek_v4_pro_eval30_rag_outputs.jsonl"),
+              pathlib.Path("data/interim/llm/nvidia_deepseek_v4_pro_eval30_rag_contexts.jsonl"),
+              pathlib.Path("reports/real_eval_30_nvidia_deepseek_v4_pro_report.md"),
+          ]
+          missing_paths = [str(path) for path in required_paths if not path.exists()]
+          if missing_paths:
+              print(f"::error::Missing expected LLM/report outputs: {missing_paths}")
+              raise SystemExit(1)
+
+          raw_files = required_paths[:2]
+          rows = []
+          for path in raw_files:
+              rows.extend(json.loads(line) for line in path.read_text(encoding="utf-8").splitlines() if line.strip())
+          nonempty = sum(bool(r.get("raw_output")) for r in rows)
+          parsed = sum(r.get("parse_failure") is False and bool(r.get("raw_output")) for r in rows)
+          if nonempty == 0:
+              print("::warning::NVIDIA DeepSeek API produced no raw outputs. This usually means NVIDIA_API_KEY is absent, the model name is unavailable, rate limited, or the API returned an error.")
+          else:
+              print(f"NVIDIA DeepSeek eval-30 raw outputs: {nonempty}/{len(rows)}; parsed: {parsed}")
+          PY
+      - name: Upload real eval-30 NVIDIA DeepSeek outputs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: herbarium-scribe-real-eval30-nvidia-deepseek-${{ github.run_id }}
+          retention-days: 30
+          path: |
+            data/processed/
+            data/interim/ocr/
+            data/interim/llm/
+            reports/

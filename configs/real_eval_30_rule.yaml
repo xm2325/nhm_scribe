@@ -1,0 +1,17 @@
+extends: configs/real_eval_10_rule.yaml
+method_name: rule_ocr
+experiment:
+  mode: real_image
+  title: Herbarium SCRIBE Real-Image Eval 30 NVIDIA DeepSeek V4 Pro Report
+sampling:
+  demo_size: 4
+  eval_size: 30
+  stratify_by: institutionCode
+  prefer_institution_disjoint: true
+image:
+  allow_download: true
+  output_subdir: real_eval_30
+  timeout_seconds: 60
+outputs:
+  prefix: real_eval_30
+  prediction_name: rule

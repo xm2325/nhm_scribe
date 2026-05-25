@@ -10,6 +10,7 @@ from typing import Any
 from .logging_utils import get_logger
 
 logger = get_logger(__name__)
+_LAST_REQUEST_AT: dict[str, float] = {}
 
 
 def _provider_http_error(provider: str, code: int) -> str:
@@ -18,6 +19,23 @@ def _provider_http_error(provider: str, code: int) -> str:
     if code == 429:
         return f"{provider} API backend failed with HTTP 429 rate_limit. The request was rate limited."
     return f"{provider} API backend failed with HTTP {code} provider_error. See provider dashboard or logs."
+
+
+def _float_value(value: Any, default: float = 0.0) -> float:
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return default
+
+
+def _apply_request_spacing(bucket: str, min_interval_seconds: float) -> None:
+    if min_interval_seconds <= 0:
+        return
+    now = time.monotonic()
+    elapsed = now - _LAST_REQUEST_AT.get(bucket, 0.0)
+    if elapsed < min_interval_seconds:
+        time.sleep(min_interval_seconds - elapsed)
+    _LAST_REQUEST_AT[bucket] = time.monotonic()
 
 
 def _chat_completions_request(
@@ -84,6 +102,7 @@ def call_llm_with_metadata(messages: list[dict[str, str]], config: dict[str, Any
         "endpoint_reachable": False,
         "api_key_present": False,
         "base_url": "",
+        "min_interval_seconds": 0.0,
     }
     if backend == "none":
         return base
@@ -126,13 +145,15 @@ def call_llm_with_metadata(messages: list[dict[str, str]], config: dict[str, Any
         key = os.environ.get("NVIDIA_API_KEY") or os.environ.get("NGC_API_KEY")
         base_url = os.environ.get("NVIDIA_BASE_URL") or lcfg.get("base_url") or "https://integrate.api.nvidia.com/v1"
         model = os.environ.get("NVIDIA_MODEL") or lcfg.get("model_name") or lcfg.get("model") or "deepseek-ai/deepseek-v4-pro"
-        base.update({"requested_model": model, "api_key_present": bool(key), "base_url": base_url})
+        min_interval = _float_value(os.environ.get("NVIDIA_MIN_INTERVAL_SECONDS") or lcfg.get("min_interval_seconds"), 0.0)
+        base.update({"requested_model": model, "api_key_present": bool(key), "base_url": base_url, "min_interval_seconds": min_interval})
         if not key:
             msg = "NVIDIA_API_KEY or NGC_API_KEY is not set; returning empty NVIDIA output."
             logger.warning(msg)
             base["error_message"] = msg
             return base
         try:
+            _apply_request_spacing(f"{backend}:{base_url}:{model}", min_interval)
             result = _chat_completions_request(
                 base_url=base_url,
                 api_key=key,

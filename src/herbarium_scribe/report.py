@@ -23,6 +23,9 @@ def md_table(df: pd.DataFrame, max_rows: int = 20) -> str:
 
 
 def _llm_artifact_family(cfg: dict[str, Any]) -> str:
+    explicit = str(cfg.get("outputs", {}).get("llm_artifact_family", "") or "").strip()
+    if explicit:
+        return explicit
     method = str(cfg.get("method_name", "") or "")
     if method.endswith("_rag"):
         return method[:-4]
@@ -55,6 +58,7 @@ def read_llm_diagnostics(paths: dict[str, Path], cfg: dict[str, Any] | None = No
                 "backend": item.get("backend", ""),
                 "requested_model": item.get("requested_model", ""),
                 "actual_model_if_available": item.get("actual_model_if_available", ""),
+                "min_interval_seconds": item.get("min_interval_seconds", ""),
                 "raw_output_length": item.get("raw_output_length", len(str(item.get("raw_output", "")))),
                 "raw_output_nonempty": bool(item.get("raw_output", "")),
                 "rag_context_count": len(retrieved) if isinstance(retrieved, list) else 0,
@@ -82,6 +86,8 @@ def read_llm_diagnostics(paths: dict[str, Path], cfg: dict[str, Any] | None = No
             col for col in ["occurrenceID", "method", "api_key_present", "base_url", "endpoint_reachable", "status", "not_evaluated_diag"]
             if col in diag.columns
         ]
+        if "min_interval_seconds" in diag.columns and "min_interval_seconds" not in detail.columns:
+            enrich_cols.append("min_interval_seconds")
         if {"occurrenceID", "method"}.issubset(set(enrich_cols)):
             detail = detail.merge(diag[enrich_cols], on=["occurrenceID", "method"], how="left")
             if "not_evaluated_diag" in detail.columns:
@@ -103,6 +109,7 @@ def read_llm_diagnostics(paths: dict[str, Path], cfg: dict[str, Any] | None = No
         "api_key_present": bool(detail.get("api_key_present", pd.Series(dtype=str)).map(_truthy).any()) if "api_key_present" in detail else False,
         "base_url": ", ".join(sorted(set(detail.get("base_url", pd.Series(dtype=str)).dropna().astype(str)) - {""})) if "base_url" in detail else "",
         "endpoint_reachable": bool(detail.get("endpoint_reachable", pd.Series(dtype=str)).map(_truthy).any()) if "endpoint_reachable" in detail else False,
+        "min_interval_seconds": ", ".join(sorted(set(detail.get("min_interval_seconds", pd.Series(dtype=str)).dropna().astype(str)) - {""})) if "min_interval_seconds" in detail else "",
         "records": int(len(detail)),
         "raw_output_nonempty": int(detail["raw_output_nonempty"].sum()) if "raw_output_nonempty" in detail else 0,
         "empty_raw_outputs": int((~detail["raw_output_nonempty"]).sum()) if "raw_output_nonempty" in detail else 0,
@@ -222,7 +229,6 @@ def write_report(cfg: dict[str, Any], split_summary: pd.DataFrame, eval_summary:
     lines.append(f"- Experiment mode: `{mode}`\n")
     lines.append(f"- Dataset source: `{dataset_source}`\n")
     if mode == "real_image":
-        lines.append("- This is a 10-record real-image evaluation.\n")
         lines.append(f"- RBGE E00633257 smoke test: `{rbge_status}`\n")
     lines.append(f"- DEMO records: `{len(demo)}`\n")
     lines.append(f"- EVAL records: `{len(eval_set)}`\n")
@@ -234,6 +240,8 @@ def write_report(cfg: dict[str, Any], split_summary: pd.DataFrame, eval_summary:
     lines.append(f"- Fixture/fallback OCR text used count: `{fixture_used}`\n")
     if mode == "fixture_only":
         lines.append("- Real-image evaluation could not be run because no local images or downloadable image URLs were available.\n")
+    if mode == "real_image":
+        lines.append(f"- This is a `{len(eval_set)}`-record real-image evaluation.\n")
     lines.append("\n## Split summary\n")
     lines.append(md_table(split_summary))
     lines.append("\n## Leakage check\n")
@@ -270,6 +278,7 @@ def write_report(cfg: dict[str, Any], split_summary: pd.DataFrame, eval_summary:
         lines.append(f"- Base URL: `{llm_summary.get('base_url', '')}`\n")
         lines.append(f"- API key present: `{llm_summary.get('api_key_present', False)}`\n")
         lines.append(f"- Endpoint reachable: `{llm_summary.get('endpoint_reachable', False)}`\n")
+        lines.append(f"- Minimum request interval seconds: `{llm_summary.get('min_interval_seconds', '')}`\n")
         lines.append(f"- LLM records attempted: `{llm_summary.get('records', 0)}`\n")
         lines.append(f"- Non-empty raw outputs: `{llm_summary.get('raw_output_nonempty', 0)}`\n")
         lines.append(f"- Empty raw outputs / likely API failures: `{llm_summary.get('empty_raw_outputs', 0)}`\n")

@@ -1,0 +1,21 @@
+extends: configs/real_eval_30_nvidia_deepseek_no_rag.yaml
+method_name: nvidia_deepseek_v4_pro_rag
+rag:
+  enabled: true
+  use_demo_examples: true
+  top_k: 3
+outputs:
+  prefix: real_eval_30
+  prediction_name: nvidia_deepseek_rag
+  llm_artifact_family: nvidia_deepseek_v4_pro_eval30
+  llm_outputs_name: nvidia_deepseek_v4_pro_eval30_rag_outputs.jsonl
+  rag_contexts_name: nvidia_deepseek_v4_pro_eval30_rag_contexts.jsonl
+  llm_diagnostics_name: nvidia_deepseek_v4_pro_eval30_rag_diagnostics.csv
+  llm_diagnostics_json_name: nvidia_deepseek_v4_pro_eval30_rag_diagnostics.json
+  combine_prediction_files:
+    - real_eval_30_predictions_rule.csv
+    - real_eval_30_predictions_nvidia_deepseek_no_rag.csv
+    - real_eval_30_predictions_nvidia_deepseek_rag.csv
+  report_name: real_eval_30_nvidia_deepseek_v4_pro_report.md
+graph:
+  preferred_method: nvidia_deepseek_v4_pro_rag
