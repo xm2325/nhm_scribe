@@ -1,0 +1,34 @@
+extends: configs/default.yaml
+method_name: deepseek_v4_pro_no_rag
+experiment:
+  mode: fixture_only
+  title: Herbarium SCRIBE Fixture Eval 10 DeepSeek V4 Pro Report
+sampling:
+  demo_size: 2
+  eval_size: 10
+  stratify_by: institutionCode
+  prefer_institution_disjoint: true
+image:
+  allow_download: false
+ocr:
+  backend: tesseract
+  allow_fixture_text: true
+llm:
+  backend: deepseek_api
+  base_url: https://api.deepseek.com
+  model_name: deepseek-v4-pro
+  temperature: 0.0
+  max_tokens: 1200
+  timeout_seconds: 120
+  retries: 1
+  retry_backoff_seconds: 5
+rag:
+  enabled: false
+  use_demo_examples: false
+  top_k: 0
+outputs:
+  prefix: eval_10
+  prediction_name: deepseek_no_rag
+  llm_outputs_name: deepseek_v4_pro_no_rag_outputs.jsonl
+  llm_diagnostics_name: deepseek_v4_pro_no_rag_diagnostics.csv
+  llm_diagnostics_json_name: deepseek_v4_pro_no_rag_diagnostics.json

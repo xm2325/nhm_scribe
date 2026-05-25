@@ -13,3 +13,9 @@ def test_nvidia_api_without_key_returns_empty(monkeypatch):
     monkeypatch.delenv("NGC_API_KEY", raising=False)
     cfg = {"llm": {"backend": "nvidia_api", "model": "deepseek-ai/deepseek-v4-pro"}}
     assert call_llm([{"role": "user", "content": "hello"}], cfg) == ""
+
+
+def test_deepseek_api_without_key_returns_empty(monkeypatch):
+    monkeypatch.delenv("DEEPSEEK_API_KEY", raising=False)
+    cfg = {"llm": {"backend": "deepseek_api", "model_name": "deepseek-v4-pro"}}
+    assert call_llm([{"role": "user", "content": "hello"}], cfg) == ""

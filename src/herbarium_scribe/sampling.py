@@ -3,6 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
+import hashlib
 import numpy as np
 import pandas as pd
 
@@ -40,7 +41,8 @@ def stratified_random_sample(df: pd.DataFrame, n: int, by: str, seed: int = 42) 
     parts = []
     for (name, g), k in zip(groups, alloc):
         if k > 0:
-            parts.append(g.sample(n=min(k, len(g)), random_state=seed + abs(hash(str(name))) % 10000))
+            stable_offset = int(hashlib.sha256(str(name).encode("utf-8")).hexdigest()[:8], 16) % 10000
+            parts.append(g.sample(n=min(k, len(g)), random_state=seed + stable_offset))
     out = pd.concat(parts, ignore_index=False) if parts else df.iloc[0:0]
     if len(out) > n:
         out = out.sample(n=n, random_state=seed)

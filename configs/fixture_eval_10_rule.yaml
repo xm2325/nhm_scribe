@@ -1,0 +1,24 @@
+extends: configs/default.yaml
+method_name: rule_ocr
+experiment:
+  mode: fixture_only
+  title: Herbarium SCRIBE Fixture Eval 10 DeepSeek V4 Pro Report
+sampling:
+  demo_size: 2
+  eval_size: 10
+  stratify_by: institutionCode
+  prefer_institution_disjoint: true
+image:
+  allow_download: false
+ocr:
+  backend: tesseract
+  allow_fixture_text: true
+llm:
+  backend: none
+rag:
+  enabled: false
+  use_demo_examples: false
+  top_k: 0
+outputs:
+  prefix: eval_10
+  prediction_name: rule

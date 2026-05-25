@@ -36,8 +36,10 @@ def detect_layout(records: pd.DataFrame, image_manifest: pd.DataFrame, cfg: dict
             "occurrenceID": occ,
             "region_id": f"{occ}::label_0",
             "region_label": "label",
+            "region_type": "label",
             "layout_method": method,
             "bbox": json.dumps(bbox),
+            "image_path": image_path,
             "crop_path": crop_path,
             "fixture_label_text": clean_str(row.get("fixture_label_text", "")),
         })

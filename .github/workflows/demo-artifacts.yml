@@ -33,7 +33,7 @@ jobs:
             data/interim/llm/
             reports/
 
-  deepseek-rag-artifacts:
+  deepseek-eval10-artifacts:
     runs-on: ubuntu-latest
     timeout-minutes: 35
     steps:
@@ -45,61 +45,91 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           python -m pip install -e '.[dev]'
-      - name: Check NVIDIA API key
-        id: nvidia-key
+      - name: Check DeepSeek API configuration
+        id: deepseek-config
         env:
-          NVIDIA_API_KEY: ${{ secrets.NVIDIA_API_KEY }}
-          NGC_API_KEY: ${{ secrets.NGC_API_KEY }}
+          DEEPSEEK_API_KEY: ${{ secrets.DEEPSEEK_API_KEY }}
+          DEEPSEEK_BASE_URL: ${{ vars.DEEPSEEK_BASE_URL }}
+          DEEPSEEK_MODEL: deepseek-v4-pro
         run: |
           mkdir -p data/processed data/interim/ocr data/interim/llm reports
-          if [ -z "${NVIDIA_API_KEY}${NGC_API_KEY}" ]; then
-            echo "enabled=false" >> "$GITHUB_OUTPUT"
+          if [ -z "${DEEPSEEK_API_KEY}" ]; then
+            echo "api_key_present=false" >> "$GITHUB_OUTPUT"
             printf '%s\n' \
-              '# DeepSeek v4 Pro + RAG pipeline not run' \
+              '# DeepSeek V4 Pro API key not configured' \
               '' \
-              'The DeepSeek v4 Pro + RAG artifact job requires a repository secret named `NVIDIA_API_KEY` or `NGC_API_KEY`.' \
+              'The fixture eval-10 job will still run and produce diagnostics, but DeepSeek calls will return empty outputs.' \
               '' \
-              'Add the secret in GitHub under Settings -> Secrets and variables -> Actions, then re-run the `demo artifacts` workflow.' \
-              > reports/deepseek_rag_not_run.md
+              'Add a repository secret named `DEEPSEEK_API_KEY` to run the direct DeepSeek API path.' \
+              > reports/deepseek_api_key_not_configured.md
           else
-            echo "enabled=true" >> "$GITHUB_OUTPUT"
+            echo "api_key_present=true" >> "$GITHUB_OUTPUT"
           fi
       - name: Run tests
-        if: steps.nvidia-key.outputs.enabled == 'true'
         run: python -m pytest
-      - name: Run DeepSeek v4 Pro + RAG pipeline
-        if: steps.nvidia-key.outputs.enabled == 'true'
+      - name: Run fixture eval-10 rule baseline
+        run: python scripts/run_pipeline.py --config configs/fixture_eval_10_rule.yaml
+      - name: Run fixture eval-10 DeepSeek no-RAG pipeline
         env:
-          NVIDIA_API_KEY: ${{ secrets.NVIDIA_API_KEY }}
-          NGC_API_KEY: ${{ secrets.NGC_API_KEY }}
-        run: python scripts/run_pipeline.py --config configs/deepseek_rag_demo.yaml
-      - name: Verify DeepSeek v4 Pro + RAG outputs
-        if: steps.nvidia-key.outputs.enabled == 'true'
+          DEEPSEEK_API_KEY: ${{ secrets.DEEPSEEK_API_KEY }}
+          DEEPSEEK_BASE_URL: ${{ vars.DEEPSEEK_BASE_URL }}
+          DEEPSEEK_MODEL: deepseek-v4-pro
+        run: python scripts/run_pipeline.py --config configs/fixture_eval_10_deepseek_no_rag.yaml
+      - name: Run fixture eval-10 DeepSeek RAG pipeline
+        env:
+          DEEPSEEK_API_KEY: ${{ secrets.DEEPSEEK_API_KEY }}
+          DEEPSEEK_BASE_URL: ${{ vars.DEEPSEEK_BASE_URL }}
+          DEEPSEEK_MODEL: deepseek-v4-pro
+        run: python scripts/run_pipeline.py --config configs/fixture_eval_10_deepseek_rag.yaml
+      - name: Verify fixture eval-10 outputs
         run: |
           python - <<'PY'
           import json
           import pathlib
+          import pandas as pd
 
-          raw = pathlib.Path("data/interim/llm/raw_llm_outputs.jsonl")
-          rag = pathlib.Path("data/interim/llm/rag_contexts.jsonl")
-          diag = pathlib.Path("data/processed/llm_diagnostics.json")
-          rows = [json.loads(line) for line in raw.read_text(encoding="utf-8").splitlines() if line.strip()] if raw.exists() else []
+          processed = pathlib.Path("data/processed")
+          eval_set = pd.read_csv(processed / "eval_10_eval_set.csv")
+          if len(eval_set) < 10:
+              print(f"::error::Expected at least 10 EVAL records, got {len(eval_set)}")
+              raise SystemExit(1)
+
+          required = [
+              "eval_10_predictions_rule.csv",
+              "eval_10_predictions_deepseek_no_rag.csv",
+              "eval_10_predictions_deepseek_rag.csv",
+              "eval_10_evaluation_summary.csv",
+              "eval_10_evaluation_by_ocr_tertile.csv",
+          ]
+          missing = [name for name in required if not (processed / name).exists()]
+          if missing:
+              print(f"::error::Missing expected outputs: {missing}")
+              raise SystemExit(1)
+
+          raw_files = [
+              pathlib.Path("data/interim/llm/deepseek_v4_pro_no_rag_outputs.jsonl"),
+              pathlib.Path("data/interim/llm/deepseek_v4_pro_rag_outputs.jsonl"),
+          ]
+          rows = []
+          for path in raw_files:
+              if path.exists():
+                  rows.extend(json.loads(line) for line in path.read_text(encoding="utf-8").splitlines() if line.strip())
           nonempty = sum(bool(r.get("raw_output")) for r in rows)
+          rag = pathlib.Path("data/interim/llm/deepseek_v4_pro_rag_contexts.jsonl")
           if not rag.exists():
               print("::error::RAG contexts were not written")
               raise SystemExit(1)
           if nonempty == 0:
-              detail = diag.read_text(encoding="utf-8") if diag.exists() else "{}"
-              print("::warning::NVIDIA DeepSeek API produced no raw outputs. This is usually an API rate limit, quota, timeout, or service issue. Diagnostics follow.")
-              print(detail)
+              print("::warning::DeepSeek API produced no raw outputs. This usually means DEEPSEEK_API_KEY is absent, the model name is unavailable, or the API returned an error.")
           else:
-              print(f"DeepSeek raw outputs: {nonempty}/{len(rows)}")
+              parsed = sum(r.get("parse_failure") is False for r in rows)
+              print(f"DeepSeek raw outputs: {nonempty}/{len(rows)}; parsed: {parsed}")
           PY
-      - name: Upload DeepSeek v4 Pro + RAG outputs
+      - name: Upload eval-10 DeepSeek fixture outputs
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: herbarium-scribe-deepseek-rag-${{ github.run_id }}
+          name: herbarium-scribe-eval10-deepseek-${{ github.run_id }}
           retention-days: 30
           path: |
             data/processed/

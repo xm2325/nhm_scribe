@@ -1,0 +1,9 @@
+extends: configs/fixture_eval_10_rule.yaml
+experiment:
+  mode: real_image
+  title: Herbarium SCRIBE Real-Image Eval 10 DeepSeek V4 Pro Report
+image:
+  allow_download: true
+ocr:
+  backend: tesseract
+  allow_fixture_text: false

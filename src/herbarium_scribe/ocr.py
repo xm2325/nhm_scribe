@@ -94,15 +94,22 @@ def run_ocr(layout_df: pd.DataFrame, cfg: dict[str, Any], paths: dict[str, Path]
             conf = 1.0
         out_txt = paths["ocr"] / (clean_str(row.get("region_id", "region")).replace(":", "_").replace("/", "_") + ".txt")
         out_txt.write_text(text, encoding="utf-8")
+        error_message = ""
+        if "error:" in status or "missing" in status:
+            error_message = status
         rows.append({
             "occurrenceID": clean_str(row.get("occurrenceID")),
             "region_id": clean_str(row.get("region_id")),
             "region_label": clean_str(row.get("region_label", "label")),
+            "region_type": clean_str(row.get("region_type", row.get("region_label", "label"))),
             "ocr_engine": engine_used,
             "ocr_status": status,
             "ocr_confidence": conf if conf is not None else "",
             "ocr_text": text,
             "text_length": len(text),
+            "image_path": clean_str(row.get("image_path", "")),
+            "crop_path": crop_path,
+            "error_message": error_message,
             "ocr_text_path": str(out_txt),
         })
     out = pd.DataFrame(rows)

@@ -103,15 +103,17 @@ def evaluate_predictions(pred_df: pd.DataFrame, gold_df: pd.DataFrame, ocr_df: p
         for field in fields:
             pred_val = clean_str(prow.get(field, ""))
             gold_val = clean_str(gold.loc[occ].get(field, ""))
+            evaluable = bool(gold_val)
             rows.append({
                 "occurrenceID": occ,
                 "method": prow.get("method", "unknown"),
                 "field": field,
                 "prediction": pred_val,
                 "gold": gold_val,
-                "coverage": int(bool(pred_val)),
-                "exact_match": exact_match(pred_val, gold_val) if gold_val else np.nan,
-                "token_f1": token_f1(pred_val, gold_val) if gold_val else np.nan,
+                "evaluable": int(evaluable),
+                "coverage": int(bool(pred_val)) if evaluable else np.nan,
+                "exact_match": exact_match(pred_val, gold_val) if evaluable else np.nan,
+                "token_f1": token_f1(pred_val, gold_val) if evaluable else np.nan,
                 "validation_warning": int(bool(clean_str(prow.get("validation_warnings", "")))),
                 "parse_failure": int(truthy_flag(prow.get("parse_failure", False))),
                 "ocr_quality_tertile": proxy_map.get(occ, {}).get("ocr_quality_tertile", "unknown"),
@@ -125,14 +127,15 @@ def evaluate_predictions(pred_df: pd.DataFrame, gold_df: pd.DataFrame, ocr_df: p
             token_f1=("token_f1", "mean"),
             validation_warning_rate=("validation_warning", "mean"),
             parse_failure_rate=("parse_failure", "mean"),
-            n=("occurrenceID", "nunique"),
+            n=("evaluable", "sum"),
         )
-        strat = detail.groupby(["method", "ocr_quality_tertile"], as_index=False).agg(
+        strat = detail.groupby(["method", "ocr_quality_tertile", "field"], as_index=False).agg(
             exact_match=("exact_match", "mean"),
             token_f1=("token_f1", "mean"),
             coverage=("coverage", "mean"),
             n_records=("occurrenceID", "nunique"),
         )
+        strat = strat.rename(columns={"field": "field_name"})
     else:
         summary = pd.DataFrame()
         strat = pd.DataFrame()
