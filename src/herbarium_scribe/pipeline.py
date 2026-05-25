@@ -257,20 +257,28 @@ def stage_extract(config_path: str | Path) -> pd.DataFrame:
                     "error_message": meta.get("error_message", ""),
                 }, ensure_ascii=False) + "\n")
             obj = _parse_llm_json(raw)
+            not_evaluated = bool(meta.get("error_message", "")) and not raw
             if obj is None:
                 obj = {}
-                parse_failure = True
+                parse_failure = bool(raw) and not not_evaluated
             else:
                 parse_failure = False
             llm_rec = validate_record(obj)
             llm_flat = flatten_record(llm_rec)
-            llm_flat.update({"occurrenceID": occ, "method": method_name, "parse_failure": parse_failure})
+            llm_flat.update({
+                "occurrenceID": occ,
+                "method": method_name,
+                "parse_failure": parse_failure,
+                "not_evaluated": not_evaluated,
+                "not_evaluated_reason": meta.get("error_message", "") if not_evaluated else "",
+            })
             rows.append(llm_flat)
             # Rewrite the last JSONL line with parse details for easier artifact inspection.
             raw_lines = llm_jsonl.read_text(encoding="utf-8").splitlines()
             last = json.loads(raw_lines[-1])
             last["parsed_json"] = obj if obj else None
             last["parse_failure"] = parse_failure
+            last["not_evaluated"] = not_evaluated
             raw_lines[-1] = json.dumps(last, ensure_ascii=False)
             llm_jsonl.write_text("\n".join(raw_lines) + "\n", encoding="utf-8")
             llm_diag_rows.append({
@@ -286,8 +294,9 @@ def stage_extract(config_path: str | Path) -> pd.DataFrame:
                 "raw_output_nonempty": bool(raw),
                 "rag_context_count": len(retrieved),
                 "parse_failure": parse_failure,
+                "not_evaluated": not_evaluated,
                 "error_message": meta.get("error_message", ""),
-                "status": "parsed" if raw and not parse_failure else ("parse_failure" if raw else "empty_raw_output"),
+                "status": "not_evaluated" if not_evaluated else ("parsed" if raw and not parse_failure else ("parse_failure" if raw else "empty_raw_output")),
             })
     out = pd.DataFrame(rows)
     out = out.merge(eval_df[["occurrenceID", "institutionCode"]], on="occurrenceID", how="left")
@@ -313,8 +322,9 @@ def stage_extract(config_path: str | Path) -> pd.DataFrame:
             "endpoint_reachable": bool(diag_df["endpoint_reachable"].any()),
             "raw_output_nonempty": int(diag_df["raw_output_nonempty"].sum()),
             "empty_raw_outputs": int((~diag_df["raw_output_nonempty"]).sum()),
-            "parsed_records": int((~diag_df["parse_failure"]).sum()),
+            "parsed_records": int((diag_df["raw_output_nonempty"] & ~diag_df["parse_failure"] & ~diag_df["not_evaluated"]).sum()),
             "parse_failures": int(diag_df["parse_failure"].sum()),
+            "not_evaluated": int(diag_df["not_evaluated"].sum()),
             "rag_context_rows": int(len(diag_df)),
             "rag_contexts_path": str(rag_jsonl),
             "raw_outputs_path": str(llm_jsonl),

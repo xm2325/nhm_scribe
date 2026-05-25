@@ -2,20 +2,19 @@ extends: configs/default.yaml
 method_name: rule_ocr
 experiment:
   mode: real_image
-  title: Herbarium SCRIBE Real-Image Eval 10 DeepSeek V4 Pro Report
+  title: RBGE E00633257 Smoke Test
 metadata:
-  source: zenodo
-  dataset_label: Zenodo 6372393
-  record_id: "6372393"
-  cache_csv: data/raw/metadata/zenodo_6372393_links.csv
+  source: rbge_e00633257
+  dataset_label: RBGE E00633257 smoke
+  allow_zenodo_image_fallback: true
 sampling:
-  demo_size: 2
-  eval_size: 10
+  demo_size: 0
+  eval_size: 1
   stratify_by: institutionCode
-  prefer_institution_disjoint: true
+  prefer_institution_disjoint: false
 image:
   allow_download: true
-  output_subdir: real_eval_10
+  output_subdir: rbge_e00633257
   timeout_seconds: 60
 ocr:
   backend: tesseract
@@ -27,5 +26,5 @@ rag:
   use_demo_examples: false
   top_k: 0
 outputs:
-  prefix: real_eval_10
+  prefix: rbge_e00633257
   prediction_name: rule

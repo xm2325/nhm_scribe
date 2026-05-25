@@ -44,6 +44,7 @@ def read_llm_diagnostics(paths: dict[str, Path]) -> tuple[dict[str, Any], pd.Dat
                 "raw_output_nonempty": bool(item.get("raw_output", "")),
                 "rag_context_count": len(retrieved) if isinstance(retrieved, list) else 0,
                 "parse_failure": _truthy(item.get("parse_failure", False)),
+                "not_evaluated": _truthy(item.get("not_evaluated", False)),
                 "error_message": item.get("error_message", ""),
                 "output_file": str(path),
             })
@@ -58,12 +59,17 @@ def read_llm_diagnostics(paths: dict[str, Path]) -> tuple[dict[str, Any], pd.Dat
 
     detail = pd.DataFrame(rows)
     if len(detail) and len(diag):
+        if "not_evaluated" in diag.columns:
+            diag = diag.rename(columns={"not_evaluated": "not_evaluated_diag"})
         enrich_cols = [
-            col for col in ["occurrenceID", "method", "api_key_present", "base_url", "endpoint_reachable", "status"]
+            col for col in ["occurrenceID", "method", "api_key_present", "base_url", "endpoint_reachable", "status", "not_evaluated_diag"]
             if col in diag.columns
         ]
         if {"occurrenceID", "method"}.issubset(set(enrich_cols)):
             detail = detail.merge(diag[enrich_cols], on=["occurrenceID", "method"], how="left")
+            if "not_evaluated_diag" in detail.columns:
+                detail["not_evaluated"] = detail["not_evaluated"] | detail["not_evaluated_diag"].map(_truthy)
+                detail = detail.drop(columns=["not_evaluated_diag"])
     elif len(diag):
         detail = diag
 
@@ -83,8 +89,9 @@ def read_llm_diagnostics(paths: dict[str, Path]) -> tuple[dict[str, Any], pd.Dat
         "records": int(len(detail)),
         "raw_output_nonempty": int(detail["raw_output_nonempty"].sum()) if "raw_output_nonempty" in detail else 0,
         "empty_raw_outputs": int((~detail["raw_output_nonempty"]).sum()) if "raw_output_nonempty" in detail else 0,
-        "parsed_records": int((~detail["parse_failure"]).sum()) if "parse_failure" in detail else 0,
+        "parsed_records": int((detail["raw_output_nonempty"] & ~detail["parse_failure"] & ~detail.get("not_evaluated", pd.Series(False, index=detail.index))).sum()) if {"raw_output_nonempty", "parse_failure"}.issubset(detail.columns) else 0,
         "parse_failures": int(detail["parse_failure"].sum()) if "parse_failure" in detail else 0,
+        "not_evaluated": int(detail["not_evaluated"].sum()) if "not_evaluated" in detail else 0,
         "raw_outputs_path": ", ".join(str(path) for path in output_files),
         "rag_contexts_path": str(paths["llm"] / "deepseek_v4_pro_rag_contexts.jsonl"),
     }
@@ -110,13 +117,16 @@ def _processed_csv(paths: dict[str, Path], cfg: dict[str, Any], suffix: str) -> 
 def _method_comparison(eval_summary: pd.DataFrame) -> pd.DataFrame:
     if eval_summary is None or len(eval_summary) == 0:
         return pd.DataFrame()
-    return eval_summary.groupby("method", as_index=False).agg(
-        coverage=("coverage", "mean"),
-        exact_match=("exact_match", "mean"),
-        token_f1=("token_f1", "mean"),
-        parse_failure_rate=("parse_failure_rate", "mean"),
-        validation_warning_rate=("validation_warning_rate", "mean"),
-    )
+    agg = {
+        "coverage": ("coverage", "mean"),
+        "exact_match": ("exact_match", "mean"),
+        "token_f1": ("token_f1", "mean"),
+        "parse_failure_rate": ("parse_failure_rate", "mean"),
+        "validation_warning_rate": ("validation_warning_rate", "mean"),
+    }
+    if "not_evaluated_rate" in eval_summary.columns:
+        agg["not_evaluated_rate"] = ("not_evaluated_rate", "mean")
+    return eval_summary.groupby("method", as_index=False).agg(**agg)
 
 
 def _rag_delta_tables(paths: dict[str, Path], cfg: dict[str, Any]) -> tuple[pd.DataFrame, pd.DataFrame, str]:
@@ -127,6 +137,8 @@ def _rag_delta_tables(paths: dict[str, Path], cfg: dict[str, Any]) -> tuple[pd.D
     rag = detail[detail["method"] == "deepseek_v4_pro_rag"]
     if len(no_rag) == 0 or len(rag) == 0:
         return pd.DataFrame(), pd.DataFrame(), "RAG comparison unavailable because both DeepSeek no-RAG and RAG methods were not present."
+    if pd.to_numeric(no_rag.get("not_evaluated", pd.Series(dtype=float)), errors="coerce").fillna(0).eq(1).all() and pd.to_numeric(rag.get("not_evaluated", pd.Series(dtype=float)), errors="coerce").fillna(0).eq(1).all():
+        return pd.DataFrame(), pd.DataFrame(), "RAG comparison unavailable because DeepSeek was not evaluated, most likely because DEEPSEEK_API_KEY was missing."
     if pd.to_numeric(no_rag.get("parse_failure", pd.Series(dtype=float)), errors="coerce").fillna(0).eq(1).all() and pd.to_numeric(rag.get("parse_failure", pd.Series(dtype=float)), errors="coerce").fillna(0).eq(1).all():
         return pd.DataFrame(), pd.DataFrame(), "RAG comparison unavailable because DeepSeek produced no parsed outputs for either no-RAG or RAG."
     cols = ["occurrenceID", "field", "exact_match", "token_f1"]
@@ -140,11 +152,11 @@ def _rag_delta_tables(paths: dict[str, Path], cfg: dict[str, Any]) -> tuple[pd.D
     if pd.isna(mean_delta):
         verdict = "RAG comparison inconclusive because comparable token F1 values were unavailable."
     elif mean_delta > 0:
-        verdict = f"RAG improved mean token F1 by {mean_delta:.3f} on this fixture smoke test."
+        verdict = f"RAG improved mean token F1 by {mean_delta:.3f} on this evaluation."
     elif mean_delta < 0:
-        verdict = f"RAG reduced mean token F1 by {abs(mean_delta):.3f} on this fixture smoke test."
+        verdict = f"RAG reduced mean token F1 by {abs(mean_delta):.3f} on this evaluation."
     else:
-        verdict = "RAG made no average token F1 difference on this fixture smoke test."
+        verdict = "RAG made no average token F1 difference on this evaluation."
     return helped, hurt, verdict
 
 
@@ -160,8 +172,20 @@ def write_report(cfg: dict[str, Any], split_summary: pd.DataFrame, eval_summary:
     eval_ids = set(eval_set.get("occurrenceID", [])) if len(eval_set) else set()
     overlap = sorted(demo_ids & eval_ids)
     image_success = int((image_manifest.get("image_path", pd.Series(dtype=str)).astype(str) != "").sum()) if len(image_manifest) else 0
-    ocr_success = int((pd.to_numeric(ocr.get("text_length", pd.Series(dtype=str)), errors="coerce").fillna(0) > 0).sum()) if len(ocr) else 0
+    image_url_count = int((image_manifest.get("image_url", pd.Series(dtype=str)).astype(str) != "").sum()) if len(image_manifest) else 0
+    ocr_status_ok = int(ocr.get("ocr_status", pd.Series(dtype=str)).astype(str).str.contains("ok", na=False).sum()) if len(ocr) else 0
+    ocr_nonempty = int((pd.to_numeric(ocr.get("text_length", pd.Series(dtype=str)), errors="coerce").fillna(0) > 0).sum()) if len(ocr) else 0
+    ocr_success = ocr_nonempty
     fixture_used = int(ocr.get("ocr_engine", pd.Series(dtype=str)).astype(str).str.contains("fixture_text", na=False).sum()) if len(ocr) else 0
+    if "used_fixture_text" in ocr.columns:
+        fixture_used = int(ocr["used_fixture_text"].map(_truthy).sum())
+    dataset_source = cfg.get("metadata", {}).get("dataset_label") or cfg.get("metadata", {}).get("source", "fixture")
+    rbge_manifest = paths["processed"] / "rbge_e00633257_image_manifest.csv"
+    rbge_status = "not run in this workspace"
+    if rbge_manifest.exists():
+        rbge_df = pd.read_csv(rbge_manifest, dtype=str).fillna("")
+        rbge_downloaded = int((rbge_df.get("image_path", pd.Series(dtype=str)).astype(str) != "").sum()) if len(rbge_df) else 0
+        rbge_status = "image available" if rbge_downloaded else "record created, direct image unavailable"
     lines = []
     title = cfg.get("experiment", {}).get("title", "Herbarium SCRIBE Demo Report")
     lines.append(f"# {title}\n")
@@ -170,9 +194,16 @@ def write_report(cfg: dict[str, Any], split_summary: pd.DataFrame, eval_summary:
     lines.append(f"- LLM backend: `{cfg.get('llm', {}).get('backend', 'none')}`\n")
     lines.append(f"- Random seed: `{cfg.get('project', {}).get('random_state', 42)}`\n")
     lines.append(f"- Experiment mode: `{mode}`\n")
+    lines.append(f"- Dataset source: `{dataset_source}`\n")
+    if mode == "real_image":
+        lines.append("- This is a 10-record real-image evaluation.\n")
+        lines.append(f"- RBGE E00633257 smoke test: `{rbge_status}`\n")
     lines.append(f"- DEMO records: `{len(demo)}`\n")
     lines.append(f"- EVAL records: `{len(eval_set)}`\n")
+    lines.append(f"- Image URLs available: `{image_url_count}`\n")
     lines.append(f"- Image load success count: `{image_success}`\n")
+    lines.append(f"- OCR status `ok` count: `{ocr_status_ok}`\n")
+    lines.append(f"- OCR non-empty text count: `{ocr_nonempty}`\n")
     lines.append(f"- OCR success count: `{ocr_success}`\n")
     lines.append(f"- Fixture/fallback OCR text used count: `{fixture_used}`\n")
     if mode == "fixture_only":
@@ -218,6 +249,7 @@ def write_report(cfg: dict[str, Any], split_summary: pd.DataFrame, eval_summary:
         lines.append(f"- Empty raw outputs / likely API failures: `{llm_summary.get('empty_raw_outputs', 0)}`\n")
         lines.append(f"- Parsed records: `{llm_summary.get('parsed_records', 0)}`\n")
         lines.append(f"- Parse failures: `{llm_summary.get('parse_failures', 0)}`\n")
+        lines.append(f"- Not evaluated: `{llm_summary.get('not_evaluated', 0)}`\n")
         lines.append(f"- Raw outputs: `{llm_summary.get('raw_outputs_path', '')}`\n")
         lines.append(f"- RAG contexts: `{llm_summary.get('rag_contexts_path', '')}`\n")
         lines.append("\n")
@@ -231,7 +263,31 @@ def write_report(cfg: dict[str, Any], split_summary: pd.DataFrame, eval_summary:
     lines.append(md_table(hurt))
     lines.append("\n## OCR evidence proxy note\n")
     lines.append("The OCR evidence proxy is not true OCR CER/WER. Catalogue metadata is not full label transcription, so the metric only checks whether catalogue field values appear in OCR text after normalisation.\n")
+    eval_detail = _processed_csv(paths, cfg, "evaluation_detail.csv")
+    success_cols = [col for col in ["occurrenceID", "method", "field", "prediction", "gold", "token_f1"] if col in eval_detail.columns]
+    lines.append("\n## Examples of success\n")
+    if len(eval_detail) and success_cols:
+        success = eval_detail[pd.to_numeric(eval_detail.get("token_f1", 0), errors="coerce").fillna(0) >= 1][success_cols].head(10)
+        lines.append(md_table(success))
+    else:
+        lines.append("_(empty)_\n")
+    lines.append("\n## Examples of failure\n")
+    if len(eval_detail) and success_cols:
+        failure = eval_detail[pd.to_numeric(eval_detail.get("token_f1", 1), errors="coerce").fillna(1) < 1][success_cols].head(10)
+        lines.append(md_table(failure))
+    else:
+        lines.append("_(empty)_\n")
     lines.append("\n## Limitations\n")
-    lines.append("The default demo uses fixture records and deterministic extraction. Optional PaddleOCR, Qwen, OpenAI, Anthropic, GBIF, and GeoNames paths are intentionally kept outside the default run.\n")
+    lines.append("Results show feasibility only, not production-level accuracy. Optional PaddleOCR, Qwen, OpenAI, Anthropic, GBIF, and GeoNames paths are intentionally kept outside the default run.\n")
+    if mode == "real_image":
+        lines.append("\n## Recommendation\n")
+        deepseek_ok = llm_summary.get("not_evaluated", 1) == 0 and llm_summary.get("parse_failures", 1) / max(llm_summary.get("records", 1), 1) <= 0.2 if llm_summary else False
+        image_ok = image_success / max(len(image_manifest), 1) >= 0.8
+        ocr_ok = ocr_nonempty / max(len(ocr), 1) >= 0.7
+        overlap_ok = len(overlap) == 0
+        if image_ok and ocr_ok and overlap_ok and (deepseek_ok or not llm_summary):
+            lines.append("Proceed to 25 records only after confirming DeepSeek parsed outputs are present in the artifact.\n")
+        else:
+            lines.append("Stop and debug before 25 records unless image download, OCR, and DeepSeek parse rates meet the configured thresholds.\n")
     out.write_text("".join(lines), encoding="utf-8")
     return out

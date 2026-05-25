@@ -33,14 +33,18 @@ jobs:
             data/interim/llm/
             reports/
 
-  deepseek-eval10-artifacts:
+  real-eval10-artifacts:
     runs-on: ubuntu-latest
-    timeout-minutes: 35
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
           python-version: '3.11'
+      - name: Install OCR system dependency
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y tesseract-ocr
       - name: Install package
         run: |
           python -m pip install --upgrade pip
@@ -58,7 +62,7 @@ jobs:
             printf '%s\n' \
               '# DeepSeek V4 Pro API key not configured' \
               '' \
-              'The fixture eval-10 job will still run and produce diagnostics, but DeepSeek calls will return empty outputs.' \
+              'The real eval-10 job will still run rule_ocr and produce diagnostics, but DeepSeek methods will be marked not evaluated.' \
               '' \
               'Add a repository secret named `DEEPSEEK_API_KEY` to run the direct DeepSeek API path.' \
               > reports/deepseek_api_key_not_configured.md
@@ -67,21 +71,23 @@ jobs:
           fi
       - name: Run tests
         run: python -m pytest
-      - name: Run fixture eval-10 rule baseline
-        run: python scripts/run_pipeline.py --config configs/fixture_eval_10_rule.yaml
-      - name: Run fixture eval-10 DeepSeek no-RAG pipeline
+      - name: Run RBGE E00633257 smoke test
+        run: python scripts/run_pipeline.py --config configs/rbge_e00633257_smoke.yaml
+      - name: Run real eval-10 rule baseline
+        run: python scripts/run_pipeline.py --config configs/real_eval_10_rule.yaml
+      - name: Run real eval-10 DeepSeek no-RAG pipeline
         env:
           DEEPSEEK_API_KEY: ${{ secrets.DEEPSEEK_API_KEY }}
           DEEPSEEK_BASE_URL: ${{ vars.DEEPSEEK_BASE_URL }}
           DEEPSEEK_MODEL: deepseek-v4-pro
-        run: python scripts/run_pipeline.py --config configs/fixture_eval_10_deepseek_no_rag.yaml
-      - name: Run fixture eval-10 DeepSeek RAG pipeline
+        run: python scripts/run_pipeline.py --config configs/real_eval_10_deepseek_no_rag.yaml
+      - name: Run real eval-10 DeepSeek RAG pipeline
         env:
           DEEPSEEK_API_KEY: ${{ secrets.DEEPSEEK_API_KEY }}
           DEEPSEEK_BASE_URL: ${{ vars.DEEPSEEK_BASE_URL }}
           DEEPSEEK_MODEL: deepseek-v4-pro
-        run: python scripts/run_pipeline.py --config configs/fixture_eval_10_deepseek_rag.yaml
-      - name: Verify fixture eval-10 outputs
+        run: python scripts/run_pipeline.py --config configs/real_eval_10_deepseek_rag.yaml
+      - name: Verify real eval-10 outputs
         run: |
           python - <<'PY'
           import json
@@ -89,17 +95,19 @@ jobs:
           import pandas as pd
 
           processed = pathlib.Path("data/processed")
-          eval_set = pd.read_csv(processed / "eval_10_eval_set.csv")
+          eval_set = pd.read_csv(processed / "real_eval_10_eval_set.csv")
           if len(eval_set) < 10:
               print(f"::error::Expected at least 10 EVAL records, got {len(eval_set)}")
               raise SystemExit(1)
 
           required = [
-              "eval_10_predictions_rule.csv",
-              "eval_10_predictions_deepseek_no_rag.csv",
-              "eval_10_predictions_deepseek_rag.csv",
-              "eval_10_evaluation_summary.csv",
-              "eval_10_evaluation_by_ocr_tertile.csv",
+              "real_eval_10_image_manifest.csv",
+              "real_eval_10_ocr_by_region.csv",
+              "real_eval_10_predictions_rule.csv",
+              "real_eval_10_predictions_deepseek_no_rag.csv",
+              "real_eval_10_predictions_deepseek_rag.csv",
+              "real_eval_10_evaluation_summary.csv",
+              "real_eval_10_evaluation_by_ocr_tertile.csv",
           ]
           missing = [name for name in required if not (processed / name).exists()]
           if missing:
@@ -125,11 +133,11 @@ jobs:
               parsed = sum(r.get("parse_failure") is False for r in rows)
               print(f"DeepSeek raw outputs: {nonempty}/{len(rows)}; parsed: {parsed}")
           PY
-      - name: Upload eval-10 DeepSeek fixture outputs
+      - name: Upload real eval-10 DeepSeek outputs
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: herbarium-scribe-eval10-deepseek-${{ github.run_id }}
+          name: herbarium-scribe-real-eval10-deepseek-${{ github.run_id }}
           retention-days: 30
           path: |
             data/processed/

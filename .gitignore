@@ -17,6 +17,7 @@ secrets.*
 # Large/raw data and generated outputs
 /data/raw/images/*
 !/data/raw/images/.gitkeep
+/data/raw/metadata/zenodo_*_links.csv
 /data/interim/*
 !/data/interim/.gitkeep
 !/data/interim/crops/.gitkeep

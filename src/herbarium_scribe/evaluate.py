@@ -100,10 +100,11 @@ def evaluate_predictions(pred_df: pd.DataFrame, gold_df: pd.DataFrame, ocr_df: p
         occ = prow["occurrenceID"]
         if occ not in gold.index:
             continue
+        not_evaluated = truthy_flag(prow.get("not_evaluated", False))
         for field in fields:
             pred_val = clean_str(prow.get(field, ""))
             gold_val = clean_str(gold.loc[occ].get(field, ""))
-            evaluable = bool(gold_val)
+            evaluable = bool(gold_val) and not not_evaluated
             rows.append({
                 "occurrenceID": occ,
                 "method": prow.get("method", "unknown"),
@@ -116,6 +117,7 @@ def evaluate_predictions(pred_df: pd.DataFrame, gold_df: pd.DataFrame, ocr_df: p
                 "token_f1": token_f1(pred_val, gold_val) if evaluable else np.nan,
                 "validation_warning": int(bool(clean_str(prow.get("validation_warnings", "")))),
                 "parse_failure": int(truthy_flag(prow.get("parse_failure", False))),
+                "not_evaluated": int(not_evaluated),
                 "ocr_quality_tertile": proxy_map.get(occ, {}).get("ocr_quality_tertile", "unknown"),
                 "ocr_evidence_proxy_score": proxy_map.get(occ, {}).get("ocr_evidence_proxy_score", np.nan),
             })
@@ -127,6 +129,7 @@ def evaluate_predictions(pred_df: pd.DataFrame, gold_df: pd.DataFrame, ocr_df: p
             token_f1=("token_f1", "mean"),
             validation_warning_rate=("validation_warning", "mean"),
             parse_failure_rate=("parse_failure", "mean"),
+            not_evaluated_rate=("not_evaluated", "mean"),
             n=("evaluable", "sum"),
         )
         strat = detail.groupby(["method", "ocr_quality_tertile", "field"], as_index=False).agg(

@@ -78,6 +78,7 @@ def run_ocr(layout_df: pd.DataFrame, cfg: dict[str, Any], paths: dict[str, Path]
         status = ""
         conf = None
         engine_used = backend
+        used_fixture_text = False
         if backend == "paddle":
             text, conf, status = ocr_image_paddle(crop_path)
             if not text:
@@ -92,6 +93,7 @@ def run_ocr(layout_df: pd.DataFrame, cfg: dict[str, Any], paths: dict[str, Path]
             engine_used = f"fixture_text_after_{engine_used}"
             status = f"{status};fixture_text_used"
             conf = 1.0
+            used_fixture_text = True
         out_txt = paths["ocr"] / (clean_str(row.get("region_id", "region")).replace(":", "_").replace("/", "_") + ".txt")
         out_txt.write_text(text, encoding="utf-8")
         error_message = ""
@@ -110,6 +112,7 @@ def run_ocr(layout_df: pd.DataFrame, cfg: dict[str, Any], paths: dict[str, Path]
             "image_path": clean_str(row.get("image_path", "")),
             "crop_path": crop_path,
             "error_message": error_message,
+            "used_fixture_text": used_fixture_text,
             "ocr_text_path": str(out_txt),
         })
     out = pd.DataFrame(rows)
