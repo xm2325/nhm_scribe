@@ -8,7 +8,12 @@ jobs:
   pytest:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout repository anonymously
+        run: |
+          git init .
+          git remote add origin https://github.com/${{ github.repository }}.git
+          git fetch --depth=1 origin ${{ github.sha }}
+          git checkout --detach FETCH_HEAD
       - uses: actions/setup-python@v5
         with:
           python-version: '3.11'
