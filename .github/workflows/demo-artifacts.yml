@@ -1,17 +1,22 @@
 name: demo artifacts
 
 on:
+  push:
+    branches: [main]
+    paths:
+      - .github/run-deepseek-eval100.trigger
   workflow_dispatch:
     inputs:
       target:
         description: Artifact job to run
         required: true
-        default: deepseek-official-eval10
+        default: deepseek-official-eval100
         type: choice
         options:
           - demo
           - nvidia-deepseek-eval10
           - deepseek-official-eval10
+          - deepseek-official-eval100
 
 jobs:
   demo-artifacts:
@@ -287,6 +292,135 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: herbarium-scribe-deepseek-official-eval10-${{ github.run_id }}
+          retention-days: 30
+          path: |
+            data/processed/
+            data/interim/ocr/
+            data/interim/llm/
+            reports/
+
+  deepseek-official-eval100:
+    if: ${{ github.event_name == 'push' || inputs.target == 'deepseek-official-eval100' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 360
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install OCR system dependency
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y tesseract-ocr
+
+      - name: Install package
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -e '.[dev]'
+
+      - name: Check DeepSeek official API configuration
+        env:
+          DEEPSEEK_API_KEY: ${{ secrets.DEEPSEEK_API_KEY_SELF }}
+          DEEPSEEK_BASE_URL: https://api.deepseek.com
+          DEEPSEEK_MODEL: deepseek-v4-pro
+          DEEPSEEK_MIN_INTERVAL_SECONDS: "1.0"
+        run: |
+          mkdir -p data/processed data/interim/ocr data/interim/llm reports
+          if [ -z "${DEEPSEEK_API_KEY}" ]; then
+            echo "::error::DEEPSEEK_API_KEY is not configured"
+            exit 1
+          fi
+          echo "DeepSeek official API key is configured."
+
+      - name: Run tests
+        run: python -m pytest
+
+      - name: Run real eval-100 rule baseline
+        run: python scripts/run_pipeline.py --config configs/real_eval_100_rule.yaml
+
+      - name: Run real eval-100 DeepSeek official no-RAG pipeline
+        env:
+          DEEPSEEK_API_KEY: ${{ secrets.DEEPSEEK_API_KEY_SELF }}
+          DEEPSEEK_BASE_URL: https://api.deepseek.com
+          DEEPSEEK_MODEL: deepseek-v4-pro
+          DEEPSEEK_MIN_INTERVAL_SECONDS: "1.0"
+        run: python scripts/run_pipeline.py --config configs/real_eval_100_deepseek_no_rag.yaml
+
+      - name: Run real eval-100 DeepSeek official RAG pipeline
+        env:
+          DEEPSEEK_API_KEY: ${{ secrets.DEEPSEEK_API_KEY_SELF }}
+          DEEPSEEK_BASE_URL: https://api.deepseek.com
+          DEEPSEEK_MODEL: deepseek-v4-pro
+          DEEPSEEK_MIN_INTERVAL_SECONDS: "1.0"
+        run: python scripts/run_pipeline.py --config configs/real_eval_100_deepseek_rag.yaml
+
+      - name: Verify DeepSeek official eval-100 outputs
+        run: |
+          python - <<'PY'
+          import json
+          import pathlib
+          import pandas as pd
+
+          processed = pathlib.Path("data/processed")
+          llm_dir = pathlib.Path("data/interim/llm")
+          reports = pathlib.Path("reports")
+
+          required = [
+              processed / "real_eval_100_eval_set.csv",
+              processed / "real_eval_100_image_manifest.csv",
+              processed / "real_eval_100_ocr_combined.csv",
+              processed / "real_eval_100_predictions_rule.csv",
+              processed / "real_eval_100_predictions_deepseek_no_rag.csv",
+              processed / "real_eval_100_predictions_deepseek_rag.csv",
+              processed / "real_eval_100_evaluation_summary.csv",
+              processed / "real_eval_100_evaluation_by_ocr_tertile.csv",
+              llm_dir / "deepseek_v4_pro_eval100_no_rag_outputs.jsonl",
+              llm_dir / "deepseek_v4_pro_eval100_rag_outputs.jsonl",
+              llm_dir / "deepseek_v4_pro_eval100_rag_contexts.jsonl",
+              reports / "real_eval_100_deepseek_v4_pro_report.md",
+          ]
+
+          missing = [str(p) for p in required if not p.exists()]
+          if missing:
+              print(f"::error::Missing expected outputs: {missing}")
+              raise SystemExit(1)
+
+          eval_set = pd.read_csv(processed / "real_eval_100_eval_set.csv")
+          if len(eval_set) != 100:
+              print(f"::error::Expected 100 EVAL records, got {len(eval_set)}")
+              raise SystemExit(1)
+
+          rows = []
+          for path in [
+              llm_dir / "deepseek_v4_pro_eval100_no_rag_outputs.jsonl",
+              llm_dir / "deepseek_v4_pro_eval100_rag_outputs.jsonl",
+          ]:
+              rows.extend(
+                  json.loads(line)
+                  for line in path.read_text(encoding="utf-8").splitlines()
+                  if line.strip()
+              )
+
+          nonempty = sum(bool(r.get("raw_output")) for r in rows)
+          parsed = sum((r.get("parse_failure") is False) and bool(r.get("raw_output")) for r in rows)
+          not_evaluated = sum(bool(r.get("not_evaluated")) for r in rows)
+
+          print(f"DeepSeek official eval-100 raw outputs: {nonempty}/{len(rows)}")
+          print(f"DeepSeek official eval-100 parsed outputs: {parsed}/{len(rows)}")
+          print(f"DeepSeek official eval-100 not evaluated: {not_evaluated}/{len(rows)}")
+
+          if nonempty == 0:
+              print("::error::DeepSeek official API produced no raw outputs.")
+              raise SystemExit(1)
+          PY
+
+      - name: Upload DeepSeek official eval-100 outputs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: herbarium-scribe-deepseek-official-eval100-${{ github.run_id }}
           retention-days: 30
           path: |
             data/processed/

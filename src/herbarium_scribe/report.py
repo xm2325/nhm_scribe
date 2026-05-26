@@ -244,6 +244,8 @@ def write_report(cfg: dict[str, Any], split_summary: pd.DataFrame, eval_summary:
     lines.append("\n## Run configuration\n")
     lines.append(f"- OCR backend: `{cfg.get('ocr', {}).get('backend', 'tesseract')}`\n")
     lines.append(f"- LLM backend: `{cfg.get('llm', {}).get('backend', 'none')}`\n")
+    if cfg.get("llm", {}).get("backend", "none") != "none":
+        lines.append(f"- LLM max tokens: `{cfg.get('llm', {}).get('max_tokens', '')}`\n")
     lines.append(f"- Random seed: `{cfg.get('project', {}).get('random_state', 42)}`\n")
     lines.append(f"- Experiment mode: `{mode}`\n")
     lines.append(f"- Dataset source: `{dataset_source}`\n")
