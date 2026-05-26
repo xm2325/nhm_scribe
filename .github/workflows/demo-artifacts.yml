@@ -1,14 +1,21 @@
 name: demo artifacts
 
 on:
-  push:
-    branches: [main]
-  pull_request:
   workflow_dispatch:
+    inputs:
+      target:
+        description: Artifact job to run
+        required: true
+        default: deepseek-official-eval10
+        type: choice
+        options:
+          - demo
+          - nvidia-deepseek-eval10
+          - deepseek-official-eval10
 
 jobs:
   demo-artifacts:
-    if: ${{ github.event_name != 'push' || (!contains(github.event.head_commit.message, '[run-deepseek-eval10]') && !contains(github.event.head_commit.message, '[run-eval30]') && !contains(github.event.head_commit.message, '[run-nvidia-smoke]') && !contains(github.event.head_commit.message, '[run-deepseek-smoke]')) }}
+    if: ${{ inputs.target == 'demo' }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -35,7 +42,7 @@ jobs:
             reports/
 
   real-eval10-artifacts:
-    if: ${{ github.event_name != 'push' || (!contains(github.event.head_commit.message, '[run-eval30]') && !contains(github.event.head_commit.message, '[run-nvidia-smoke]') && !contains(github.event.head_commit.message, '[run-deepseek-smoke]') && !contains(github.event.head_commit.message, '[run-deepseek-eval10]')) }}
+    if: ${{ inputs.target == 'nvidia-deepseek-eval10' }}
     runs-on: ubuntu-latest
     timeout-minutes: 45
     steps:
@@ -162,7 +169,7 @@ jobs:
             reports/
             
   deepseek-official-eval10:
-    if: ${{ github.event_name == 'workflow_dispatch' || contains(github.event.head_commit.message, '[run-deepseek-eval10]') }}
+    if: ${{ inputs.target == 'deepseek-official-eval10' }}
     runs-on: ubuntu-latest
     timeout-minutes: 90
     steps:

@@ -1,13 +1,10 @@
 name: NVIDIA DeepSeek smoke artifacts
 
 on:
-  push:
-    branches: [main]
   workflow_dispatch:
 
 jobs:
   nvidia-smoke-artifacts:
-    if: ${{ github.event_name == 'workflow_dispatch' || contains(github.event.head_commit.message, '[run-nvidia-smoke]') }}
     runs-on: ubuntu-latest
     timeout-minutes: 90
     steps:

@@ -1,13 +1,10 @@
 name: real eval30 artifacts
 
 on:
-  push:
-    branches: [main]
   workflow_dispatch:
 
 jobs:
   real-eval30-artifacts:
-    if: ${{ github.event_name == 'workflow_dispatch' || contains(github.event.head_commit.message, '[run-eval30]') }}
     runs-on: ubuntu-latest
     timeout-minutes: 120
     steps:
