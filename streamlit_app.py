@@ -97,6 +97,14 @@ def read_bundle_jsonl(name: str) -> list[dict[str, Any]]:
     return read_local_jsonl(ROOT / name)
 
 
+def show_source_image(image_url: str) -> None:
+    if not image_url:
+        st.warning("No image URL found.")
+        return
+    st.image(image_url, use_container_width=True)
+    st.link_button("Open source image", image_url)
+
+
 @st.cache_data(show_spinner=False)
 def load_eval100() -> dict[str, Any]:
     prefix = "data/processed/real_eval_100_"
@@ -163,16 +171,223 @@ def llm_index(rows: list[dict[str, Any]]) -> dict[str, dict[str, Any]]:
     return {clean(row.get("occurrenceID")): row for row in rows}
 
 
+def first_row(df: pd.DataFrame, occ: str) -> dict[str, Any]:
+    if df.empty or "occurrenceID" not in df.columns:
+        return {}
+    match = df[df["occurrenceID"] == occ]
+    return match.iloc[0].to_dict() if not match.empty else {}
+
+
 def selected_record(data: dict[str, Any]) -> str:
     eval_set = data["eval_set"]
     if eval_set.empty:
         return ""
+    occurrence_ids = [clean(value) for value in eval_set["occurrenceID"].tolist()]
     labels = []
     for _, row in eval_set.iterrows():
         bits = [clean(row.get("catalogNumber")), clean(row.get("institutionCode")), clean(row.get("scientificName"))]
         labels.append(" | ".join([item for item in bits if item]) or clean(row.get("occurrenceID")))
-    choice = st.sidebar.selectbox("Record", list(range(len(labels))), format_func=lambda i: labels[i])
-    return clean(eval_set.iloc[int(choice)]["occurrenceID"])
+    default = 0
+    current = clean(st.session_state.get("selected_occ"))
+    if current in occurrence_ids:
+        default = occurrence_ids.index(current)
+    choice = st.sidebar.selectbox(
+        "Record",
+        list(range(len(labels))),
+        index=default,
+        format_func=lambda i: labels[i],
+        key="record_choice",
+    )
+    occ = clean(eval_set.iloc[int(choice)]["occurrenceID"])
+    st.session_state["selected_occ"] = occ
+    return occ
+
+
+def select_gallery_record(occ: str, index: int) -> None:
+    st.session_state["selected_occ"] = occ
+    st.session_state["record_choice"] = index
+    st.session_state["page"] = "Pipeline Review"
+
+
+def parsed_record_table(row: dict[str, Any]) -> pd.DataFrame:
+    parsed = row.get("parsed_json") or {}
+    if isinstance(parsed, str):
+        try:
+            parsed = json.loads(parsed)
+        except Exception:
+            parsed = {}
+    rows = []
+    for field in EXTRACTION_FIELDS:
+        item = parsed.get(field, {}) if isinstance(parsed, dict) else {}
+        if not isinstance(item, dict):
+            item = {"value": item, "confidence": "", "evidence_span": ""}
+        evidence = item.get("evidence_span", "")
+        if isinstance(evidence, (dict, list)):
+            evidence = json.dumps(evidence, ensure_ascii=False)
+        rows.append({
+            "field": field,
+            "value": clean(item.get("value")),
+            "confidence": clean(item.get("confidence")),
+            "evidence": clean(evidence),
+        })
+    return pd.DataFrame(rows)
+
+
+def llm_row_for_method(data: dict[str, Any], occ: str, method: str) -> dict[str, Any]:
+    rows = data["llm_no_rag"] if method == "deepseek_v4_pro_no_rag" else data["llm_rag"]
+    return llm_index(rows).get(occ, {})
+
+
+def comparison_table(data: dict[str, Any], occ: str) -> pd.DataFrame:
+    eval_set = data["eval_set"]
+    gold = first_row(eval_set, occ)
+    preds = prediction_rows(data, occ)
+    detail = data["evaluation_detail"]
+    rows = []
+    for field in EXTRACTION_FIELDS:
+        row: dict[str, Any] = {"field": field, "gold": clean(gold.get(field))}
+        for method in ["rule_ocr", "deepseek_v4_pro_no_rag", "deepseek_v4_pro_rag"]:
+            match = preds[(preds["method"] == method) & (preds["field"] == field)] if not preds.empty else pd.DataFrame()
+            row[method] = clean(match.iloc[0]["value"]) if not match.empty else ""
+            if not detail.empty and "occurrenceID" in detail.columns:
+                dmatch = detail[
+                    (detail["occurrenceID"] == occ)
+                    & (detail["method"] == method)
+                    & (detail["field"] == field)
+                ]
+                row[f"{method}_f1"] = clean(dmatch.iloc[0].get("token_f1")) if not dmatch.empty else ""
+        rows.append(row)
+    return pd.DataFrame(rows)
+
+
+def show_llm_result_panel(row: dict[str, Any], title: str) -> None:
+    st.markdown(f"**{title}**")
+    if not row:
+        st.info("No LLM output found for this record.")
+        return
+    cols = st.columns(4)
+    cols[0].metric("Raw chars", clean(row.get("raw_output_length")) or "0")
+    cols[1].metric("Parsed", "no" if row.get("parse_failure") else "yes")
+    cols[2].metric("RAG ctx", len(row.get("retrieved_context") or []))
+    cols[3].metric("Model", clean(row.get("actual_model_if_available")) or clean(row.get("requested_model")))
+    if row.get("error_message"):
+        st.warning(clean(row.get("error_message")))
+    st.dataframe(parsed_record_table(row), use_container_width=True, hide_index=True)
+    with st.expander("Prompt, context, and raw output", expanded=False):
+        st.text_area(f"{title} prompt", clean(row.get("prompt")), height=180, label_visibility="collapsed")
+        context = row.get("retrieved_context") or []
+        if context:
+            st.json(context, expanded=False)
+        st.code(clean(row.get("raw_output")), language="json")
+
+
+def show_pipeline_review(data: dict[str, Any]) -> None:
+    st.title("Pipeline Review")
+    st.caption("One specimen at a time: original image, OCR text, LLM extraction, and evaluation side by side.")
+    occ = selected_record(data)
+    if not occ:
+        st.info("No records available.")
+        return
+
+    eval_set = data["eval_set"]
+    gold = first_row(eval_set, occ)
+    image_row = first_row(data["image_manifest"], occ)
+    ocr_row = first_row(data["ocr_combined"], occ)
+    ocr_region = first_row(data["ocr_by_region"], occ)
+    no_rag = llm_row_for_method(data, occ, "deepseek_v4_pro_no_rag")
+    rag = llm_row_for_method(data, occ, "deepseek_v4_pro_rag")
+
+    st.subheader(clean(gold.get("catalogNumber")) or occ)
+    st.caption(occ)
+    status = st.columns(5)
+    status[0].metric("Image", clean(image_row.get("image_status")) or "unknown")
+    status[1].metric("OCR", clean(ocr_region.get("ocr_status")) or "unknown")
+    status[2].metric("OCR chars", clean(ocr_row.get("text_length")) or "0")
+    status[3].metric("no-RAG raw", clean(no_rag.get("raw_output_length")) or "0")
+    status[4].metric("RAG raw", clean(rag.get("raw_output_length")) or "0")
+
+    image_col, ocr_col = st.columns([1.0, 1.15])
+    with image_col:
+        st.subheader("1. Original Image")
+        image_url = clean(image_row.get("image_url"))
+        show_source_image(image_url)
+        st.dataframe(
+            pd.DataFrame([{
+                "institutionCode": clean(gold.get("institutionCode")),
+                "catalogNumber": clean(gold.get("catalogNumber")),
+                "scientificName": clean(gold.get("scientificName")),
+                "image_status": clean(image_row.get("image_status")),
+            }]),
+            use_container_width=True,
+            hide_index=True,
+        )
+
+    with ocr_col:
+        st.subheader("2. OCR Result")
+        ocr_meta = pd.DataFrame([{
+            "engine": clean(ocr_region.get("ocr_engine")),
+            "status": clean(ocr_region.get("ocr_status")),
+            "confidence": clean(ocr_region.get("ocr_confidence")),
+            "used_fixture_text": clean(ocr_region.get("used_fixture_text")),
+        }])
+        st.dataframe(ocr_meta, use_container_width=True, hide_index=True)
+        st.text_area("OCR text", clean(ocr_row.get("ocr_text")), height=460, label_visibility="collapsed")
+
+    st.subheader("3. LLM Result")
+    tab_no, tab_rag = st.tabs(["DeepSeek no-RAG", "DeepSeek RAG"])
+    with tab_no:
+        show_llm_result_panel(no_rag, "DeepSeek no-RAG")
+    with tab_rag:
+        show_llm_result_panel(rag, "DeepSeek RAG")
+
+    st.subheader("4. Gold vs Predictions")
+    table = comparison_table(data, occ)
+    st.dataframe(table, use_container_width=True, hide_index=True)
+
+
+def show_image_gallery(data: dict[str, Any]) -> None:
+    st.title("Image Gallery")
+    st.caption("Browse original specimen images first, then open one record in the full pipeline review.")
+    eval_set = data["eval_set"].copy()
+    if eval_set.empty:
+        st.info("No records available.")
+        return
+    query = st.text_input("Filter by catalogue, institution, or taxon", "")
+    if query:
+        q = query.lower()
+        mask = eval_set.apply(lambda row: q in " ".join(clean(row.get(col)).lower() for col in ["catalogNumber", "institutionCode", "scientificName", "occurrenceID"]), axis=1)
+        eval_set = eval_set[mask]
+    page_size = st.slider("Images per page", min_value=6, max_value=24, value=12, step=6)
+    total = len(eval_set)
+    pages = max((total - 1) // page_size + 1, 1)
+    page = st.number_input("Page", min_value=1, max_value=pages, value=1, step=1)
+    start = (int(page) - 1) * page_size
+    subset = eval_set.iloc[start:start + page_size]
+    st.caption(f"Showing {start + 1 if total else 0}-{min(start + page_size, total)} of {total}")
+
+    manifest = data["image_manifest"]
+    for row_start in range(0, len(subset), 3):
+        cols = st.columns(3)
+        for offset, (_, row) in enumerate(subset.iloc[row_start:row_start + 3].iterrows()):
+            occ = clean(row.get("occurrenceID"))
+            absolute_index = data["eval_set"].index[data["eval_set"]["occurrenceID"] == occ].tolist()[0]
+            image_row = first_row(manifest, occ)
+            image_url = clean(image_row.get("image_url"))
+            with cols[offset]:
+                if image_url:
+                    st.image(image_url, use_container_width=True)
+                else:
+                    st.warning("No image URL")
+                st.markdown(f"**{clean(row.get('catalogNumber')) or 'No catalogue number'}**")
+                st.caption(clean(row.get("scientificName")) or occ)
+                st.button(
+                    "Review pipeline",
+                    key=f"review-{absolute_index}",
+                    on_click=select_gallery_record,
+                    args=(occ, int(absolute_index)),
+                    use_container_width=True,
+                )
+
 
 
 def show_overview(data: dict[str, Any]) -> None:
@@ -221,11 +436,7 @@ def show_record_explorer(data: dict[str, Any]) -> None:
     with left:
         st.subheader(clean(gold.get("catalogNumber")) or occ)
         image_url = clean(image_row.get("image_url"))
-        if image_url:
-            st.image(image_url, use_container_width=True)
-            st.link_button("Open Source Image", image_url)
-        else:
-            st.warning("No image URL found.")
+        show_source_image(image_url)
         st.caption(f"occurrenceID: {occ}")
 
     with right:
@@ -392,9 +603,17 @@ def main() -> None:
     data = load_eval100()
     st.sidebar.title("Herbarium SCRIBE")
     st.sidebar.caption(f"Data: {data['source']}")
-    page = st.sidebar.radio("View", ["Overview", "Record Explorer", "LLM/RAG Trace", "Live Upload"])
+    page = st.sidebar.radio(
+        "View",
+        ["Pipeline Review", "Image Gallery", "Overview", "Record Explorer", "LLM/RAG Trace", "Live Upload"],
+        key="page",
+    )
     if page == "Overview":
         show_overview(data)
+    elif page == "Pipeline Review":
+        show_pipeline_review(data)
+    elif page == "Image Gallery":
+        show_image_gallery(data)
     elif page == "Record Explorer":
         show_record_explorer(data)
     elif page == "LLM/RAG Trace":
