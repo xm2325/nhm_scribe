@@ -49,6 +49,17 @@ make test
 make demo
 ```
 
+## Streamlit MVP
+
+The repository also includes a minimal interactive app for reviewing the successful 100-record real-image evaluation and trying one uploaded image through OCR plus optional DeepSeek extraction:
+
+```bash
+python -m pip install -e .
+streamlit run streamlit_app.py
+```
+
+For live DeepSeek calls, configure `DEEPSEEK_API_KEY`, `DEEPSEEK_BASE_URL`, and `DEEPSEEK_MODEL` in your environment or Streamlit secrets. See [docs/streamlit_mvp.md](docs/streamlit_mvp.md) for deployment notes.
+
 ## Cloud demo artifacts
 
 GitHub Actions runs the same quick demo on an Ubuntu runner whenever `main` is pushed, on pull requests, or when the `demo artifacts` workflow is started manually. The workflow installs the package, runs `pytest`, runs:

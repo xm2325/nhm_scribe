@@ -16,6 +16,7 @@ dependencies = [
   "Pillow>=10.0",
   "pytesseract>=0.3.10",
   "tabulate>=0.9",
+  "streamlit>=1.35",
 ]
 
 [project.optional-dependencies]
