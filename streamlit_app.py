@@ -3,6 +3,7 @@ from __future__ import annotations
 import io
 import json
 import os
+import hashlib
 import sys
 import tempfile
 import zipfile
@@ -28,6 +29,7 @@ from herbarium_scribe.schema import EXTRACTION_FIELDS, flatten_record, validate_
 APP_BUNDLE = ROOT / "app_data" / "real_eval_100_streamlit_bundle.zip"
 LOCAL_PROCESSED = ROOT / "data" / "processed"
 LOCAL_LLM = ROOT / "data" / "interim" / "llm"
+THUMB_PREFIX = "app_data/thumbnails/real_eval_100"
 
 
 st.set_page_config(page_title="Herbarium SCRIBE", layout="wide")
@@ -97,11 +99,36 @@ def read_bundle_jsonl(name: str) -> list[dict[str, Any]]:
     return read_local_jsonl(ROOT / name)
 
 
-def show_source_image(image_url: str) -> None:
+def thumbnail_name(occurrence_id: str) -> str:
+    digest = hashlib.sha1(occurrence_id.encode("utf-8")).hexdigest()[:16]
+    return f"{THUMB_PREFIX}/{digest}.jpg"
+
+
+@st.cache_data(show_spinner=False)
+def read_thumbnail_from_zip(path: str, name: str) -> bytes:
+    with zipfile.ZipFile(path) as zf:
+        return zf.read(name)
+
+
+def thumbnail_bytes(occurrence_id: str) -> bytes | None:
+    if not APP_BUNDLE.exists():
+        return None
+    name = thumbnail_name(occurrence_id)
+    if name not in zip_names(str(APP_BUNDLE)):
+        return None
+    return read_thumbnail_from_zip(str(APP_BUNDLE), name)
+
+
+def show_source_image(image_url: str, occurrence_id: str = "") -> None:
     if not image_url:
         st.warning("No image URL found.")
         return
-    st.image(image_url, use_container_width=True)
+    thumb = thumbnail_bytes(occurrence_id) if occurrence_id else None
+    if thumb:
+        st.image(thumb, use_container_width=True)
+        st.caption("Cached preview; open the source image for the full-resolution original.")
+    else:
+        st.image(image_url, use_container_width=True)
     st.link_button("Open source image", image_url)
 
 
@@ -310,7 +337,7 @@ def show_pipeline_review(data: dict[str, Any]) -> None:
     with image_col:
         st.subheader("1. Original Image")
         image_url = clean(image_row.get("image_url"))
-        show_source_image(image_url)
+        show_source_image(image_url, occ)
         st.dataframe(
             pd.DataFrame([{
                 "institutionCode": clean(gold.get("institutionCode")),
@@ -373,8 +400,11 @@ def show_image_gallery(data: dict[str, Any]) -> None:
             absolute_index = data["eval_set"].index[data["eval_set"]["occurrenceID"] == occ].tolist()[0]
             image_row = first_row(manifest, occ)
             image_url = clean(image_row.get("image_url"))
+            thumb = thumbnail_bytes(occ)
             with cols[offset]:
-                if image_url:
+                if thumb:
+                    st.image(thumb, use_container_width=True)
+                elif image_url:
                     st.image(image_url, use_container_width=True)
                 else:
                     st.warning("No image URL")
@@ -436,7 +466,7 @@ def show_record_explorer(data: dict[str, Any]) -> None:
     with left:
         st.subheader(clean(gold.get("catalogNumber")) or occ)
         image_url = clean(image_row.get("image_url"))
-        show_source_image(image_url)
+        show_source_image(image_url, occ)
         st.caption(f"occurrenceID: {occ}")
 
     with right:

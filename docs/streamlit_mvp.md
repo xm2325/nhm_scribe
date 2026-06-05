@@ -39,3 +39,11 @@ DEEPSEEK_MODEL = "deepseek-v4-pro"
 ## Included Demo Data
 
 The app ships with `app_data/real_eval_100_streamlit_bundle.zip`, a sanitised bundle built from the successful GitHub Actions eval100 artifact. It contains the 100-record evaluation CSVs, OCR outputs, LLM outputs, RAG contexts, diagnostics, and report markdown needed by the app. It removes provider response bodies and reasoning traces before committing the bundle.
+
+The same bundle can include cached thumbnails under `app_data/thumbnails/real_eval_100/`. These are small JPEG previews generated from the image URLs in `real_eval_100_image_manifest.csv`; the app uses them for fast browsing and keeps the original image URL as the full-resolution source link.
+
+To rebuild thumbnails:
+
+```bash
+python scripts/build_streamlit_thumbnails.py app_data/real_eval_100_streamlit_bundle.zip
+```
