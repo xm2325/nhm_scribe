@@ -22,6 +22,7 @@ dependencies = [
 [project.optional-dependencies]
 dev = ["pytest>=8.0"]
 llm = ["openai>=1.0", "anthropic>=0.30"]
+hespi = ["hespi==0.6.2"]
 
 [tool.setuptools]
 package-dir = {"" = "src"}

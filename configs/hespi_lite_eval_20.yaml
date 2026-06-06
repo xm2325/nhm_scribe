@@ -1,0 +1,29 @@
+extends: configs/hespi_lite_eval_20_baseline.yaml
+paths:
+  data_dir: data/experiments/hespi_lite
+  reports_dir: reports/hespi_lite_poc
+experiment:
+  mode: real_image
+  title: "Hespi-lite POC: Field-Crop OCR + DeepSeek"
+layout:
+  strategy: hespi_lite
+  gpu: false
+  component_confidence: 0.25
+  field_confidence: 0.20
+  sheet_component_resolution: 1280
+  label_field_resolution: 1280
+  max_primary_labels: 2
+  max_fields_per_label: 20
+ocr:
+  backend: tesseract
+  tesseract_config: "--psm 6"
+  allow_fixture_text: false
+  include_region_labels_in_prompt: true
+outputs:
+  prefix: hespi_lite_eval20
+  prediction_name: deepseek_no_rag
+  llm_artifact_family: hespi_lite_eval20
+  llm_outputs_name: hespi_lite_eval20_no_rag_outputs.jsonl
+  llm_diagnostics_name: hespi_lite_eval20_no_rag_diagnostics.csv
+  llm_diagnostics_json_name: hespi_lite_eval20_no_rag_diagnostics.json
+  report_name: hespi_lite_eval20_report.md

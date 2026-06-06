@@ -23,11 +23,20 @@ image:
 layout:
   strategy: auto
   fallback: full_image_or_fixture_text
+  gpu: false
+  component_confidence: 0.25
+  field_confidence: 0.20
+  sheet_component_resolution: 1280
+  label_field_resolution: 1280
+  max_primary_labels: 2
+  max_fields_per_label: 20
 
 ocr:
   backend: tesseract
   tesseract_lang: eng
+  tesseract_config: ""
   allow_fixture_text: true
+  include_region_labels_in_prompt: false
 
 llm:
   backend: none

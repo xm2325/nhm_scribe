@@ -1,0 +1,134 @@
+name: Hespi-lite POC
+
+on:
+  workflow_dispatch:
+
+jobs:
+  eval20:
+    runs-on: ubuntu-latest
+    timeout-minutes: 240
+    env:
+      DEEPSEEK_API_KEY: ${{ secrets.DEEPSEEK_API_KEY_SELF }}
+      DEEPSEEK_BASE_URL: https://api.deepseek.com
+      DEEPSEEK_MODEL: deepseek-v4-pro
+      DEEPSEEK_MIN_INTERVAL_SECONDS: "1.0"
+    steps:
+      - name: Checkout repository anonymously
+        run: |
+          git init .
+          git remote add origin https://github.com/${{ github.repository }}.git
+          git fetch --depth=1 origin ${{ github.sha }}
+          git checkout --detach FETCH_HEAD
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+
+      - name: Cache Hespi model downloads
+        uses: actions/cache@v5
+        with:
+          path: |
+            ~/.cache/hespi
+            ~/.hespi
+          key: hespi-0.6.2-${{ runner.os }}
+
+      - name: Install OCR system dependency
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y tesseract-ocr
+
+      - name: Install package with Hespi
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -e '.[dev,hespi]'
+
+      - name: Check DeepSeek official API configuration
+        run: |
+          if [ -z "${DEEPSEEK_API_KEY}" ]; then
+            echo "::error::Repository secret DEEPSEEK_API_KEY_SELF is not configured"
+            exit 1
+          fi
+          echo "DeepSeek official API key is configured."
+
+      - name: Run tests
+        run: python -m pytest
+
+      - name: Run full-image eval20 baseline
+        run: python scripts/run_pipeline.py --config configs/hespi_lite_eval_20_baseline.yaml
+
+      - name: Reuse downloaded images for Hespi run
+        run: |
+          mkdir -p data/experiments/hespi_lite/raw/images
+          cp -a data/experiments/hespi_lite_baseline/raw/images/. data/experiments/hespi_lite/raw/images/
+
+      - name: Run Hespi-lite eval20
+        run: python scripts/run_pipeline.py --config configs/hespi_lite_eval_20.yaml
+
+      - name: Build A/B comparison report
+        run: python scripts/compare_hespi_lite_poc.py
+
+      - name: Verify POC artifacts
+        run: |
+          python - <<'PY'
+          import json
+          from pathlib import Path
+          import pandas as pd
+
+          baseline = Path("data/experiments/hespi_lite_baseline")
+          hespi = Path("data/experiments/hespi_lite")
+          baseline_eval = pd.read_csv(baseline / "processed/hespi_lite_eval20_baseline_eval_set.csv")
+          hespi_eval = pd.read_csv(hespi / "processed/hespi_lite_eval20_eval_set.csv")
+          if len(baseline_eval) != 20 or len(hespi_eval) != 20:
+              raise SystemExit("Expected exactly 20 EVAL records in both pipelines")
+          if set(baseline_eval["occurrenceID"]) != set(hespi_eval["occurrenceID"]):
+              raise SystemExit("Baseline and Hespi-lite EVAL sets differ")
+
+          diagnostics = pd.read_csv(
+              hespi / "processed/hespi_lite_eval20_hespi_layout_diagnostics.csv"
+          )
+          print(
+              "Hespi primary labels:",
+              pd.to_numeric(diagnostics["primary_label_count"], errors="coerce").fillna(0).sum(),
+          )
+          print(
+              "Hespi label fields:",
+              pd.to_numeric(diagnostics["label_field_count"], errors="coerce").fillna(0).sum(),
+          )
+
+          for root, name in [
+              (baseline, "hespi_lite_eval20_baseline_no_rag_outputs.jsonl"),
+              (hespi, "hespi_lite_eval20_no_rag_outputs.jsonl"),
+          ]:
+              path = root / "interim/llm" / name
+              rows = [
+                  json.loads(line)
+                  for line in path.read_text(encoding="utf-8").splitlines()
+                  if line.strip()
+              ]
+              nonempty = sum(bool(row.get("raw_output")) for row in rows)
+              parsed = sum(
+                  bool(row.get("raw_output")) and row.get("parse_failure") is False
+                  for row in rows
+              )
+              print(f"{name}: nonempty={nonempty}/{len(rows)}, parsed={parsed}/{len(rows)}")
+              if nonempty == 0:
+                  print(f"::warning::{name} contains no non-empty DeepSeek outputs")
+          PY
+
+      - name: Upload Hespi-lite POC outputs
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: herbarium-scribe-hespi-lite-poc-${{ github.run_id }}
+          retention-days: 30
+          path: |
+            data/experiments/hespi_lite_baseline/processed/
+            data/experiments/hespi_lite_baseline/raw/images/
+            data/experiments/hespi_lite_baseline/interim/ocr/
+            data/experiments/hespi_lite_baseline/interim/llm/
+            data/experiments/hespi_lite/processed/
+            data/experiments/hespi_lite/interim/crops/
+            data/experiments/hespi_lite/interim/hespi_lite/
+            data/experiments/hespi_lite/interim/ocr/
+            data/experiments/hespi_lite/interim/llm/
+            reports/hespi_lite_poc/

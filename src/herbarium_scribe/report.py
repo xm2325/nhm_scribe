@@ -218,6 +218,7 @@ def write_report(cfg: dict[str, Any], split_summary: pd.DataFrame, eval_summary:
     demo = _processed_csv(paths, cfg, "demo_set.csv")
     eval_set = _processed_csv(paths, cfg, "eval_set.csv")
     image_manifest = _processed_csv(paths, cfg, "image_manifest.csv")
+    layout = _processed_csv(paths, cfg, "layout_boxes.csv")
     ocr = _processed_csv(paths, cfg, "ocr_by_region.csv")
     mode = cfg.get("experiment", {}).get("mode", "fixture_only" if cfg.get("ocr", {}).get("allow_fixture_text", True) else "real_image")
     demo_ids = set(demo.get("occurrenceID", [])) if len(demo) else set()
@@ -243,6 +244,7 @@ def write_report(cfg: dict[str, Any], split_summary: pd.DataFrame, eval_summary:
     lines.append(f"# {title}\n")
     lines.append("\n## Run configuration\n")
     lines.append(f"- OCR backend: `{cfg.get('ocr', {}).get('backend', 'tesseract')}`\n")
+    lines.append(f"- Layout strategy: `{cfg.get('layout', {}).get('strategy', 'auto')}`\n")
     lines.append(f"- LLM backend: `{cfg.get('llm', {}).get('backend', 'none')}`\n")
     if cfg.get("llm", {}).get("backend", "none") != "none":
         lines.append(f"- LLM max tokens: `{cfg.get('llm', {}).get('max_tokens', '')}`\n")
@@ -282,6 +284,31 @@ def write_report(cfg: dict[str, Any], split_summary: pd.DataFrame, eval_summary:
         lines.append(md_table(manifest.head(20)))
     else:
         lines.append("_(no image manifest)_\n")
+    lines.append("\n## Layout diagnostics\n")
+    if len(layout):
+        layout_counts = layout.groupby("layout_method", as_index=False).agg(
+            regions=("region_id", "count"),
+            records=("occurrenceID", "nunique"),
+        )
+        lines.append(md_table(layout_counts))
+    else:
+        lines.append("_(no layout output)_\n")
+    hespi_diag = _processed_csv(paths, cfg, "hespi_layout_diagnostics.csv")
+    if len(hespi_diag):
+        fallback_count = int(hespi_diag.get("fallback_used", pd.Series(dtype=str)).map(_truthy).sum())
+        primary_count = int(pd.to_numeric(
+            hespi_diag.get("primary_label_count", pd.Series(0, index=hespi_diag.index)),
+            errors="coerce",
+        ).fillna(0).sum())
+        field_count = int(pd.to_numeric(
+            hespi_diag.get("label_field_count", pd.Series(0, index=hespi_diag.index)),
+            errors="coerce",
+        ).fillna(0).sum())
+        lines.append(f"- Hespi records attempted: `{len(hespi_diag)}`\n")
+        lines.append(f"- Primary labels detected: `{primary_count}`\n")
+        lines.append(f"- Label fields detected: `{field_count}`\n")
+        lines.append(f"- Records using fallback: `{fallback_count}`\n")
+        lines.append(md_table(hespi_diag))
     lines.append("\n## Method comparison\n")
     lines.append(md_table(_method_comparison(eval_summary)))
     lines.append("\n## Evaluation summary\n")
@@ -289,7 +316,7 @@ def write_report(cfg: dict[str, Any], split_summary: pd.DataFrame, eval_summary:
     lines.append("\n## Stratified by OCR quality tertile\n")
     lines.append(md_table(stratified, max_rows=100))
     if len(eval_set) < 25:
-        lines.append("\n_Only 10 or fewer EVAL records were used, so OCR quality tertiles are a smoke-test diagnostic rather than a stable stratification._\n")
+        lines.append("\n_Fewer than 25 EVAL records were used, so OCR quality tertiles are a smoke-test diagnostic rather than a stable stratification._\n")
     llm_summary, llm_detail = read_llm_diagnostics(paths, cfg)
     if llm_summary:
         lines.append("\n## LLM and RAG diagnostics\n")

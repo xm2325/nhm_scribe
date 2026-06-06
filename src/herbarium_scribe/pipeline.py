@@ -206,6 +206,8 @@ def stage_extract(config_path: str | Path) -> pd.DataFrame:
     ocr_path = paths["processed"] / "ocr_by_region.csv"
     ocr_df = pd.read_csv(ocr_path, dtype=str).fillna("") if ocr_path.exists() else stage_ocr(config_path)
     ocr_combined = ocr_df.groupby("occurrenceID")["ocr_text"].apply("\n".join).to_dict()
+    prompt_column = "ocr_prompt_text" if "ocr_prompt_text" in ocr_df.columns else "ocr_text"
+    ocr_prompt_combined = ocr_df.groupby("occurrenceID")[prompt_column].apply("\n\n".join).to_dict()
     demo_df = _read_demo(paths)
     corpus = build_rag_corpus(demo_df if rag_enabled and rag_cfg.get("use_demo_examples", True) else None)
     rows = []
@@ -225,14 +227,15 @@ def stage_extract(config_path: str | Path) -> pd.DataFrame:
     for _, gold in eval_df.iterrows():
         occ = clean_str(gold.get("occurrenceID"))
         text = ocr_combined.get(occ, "")
+        prompt_text = ocr_prompt_combined.get(occ, text)
         rule_rec = extract_rule_based(text, gold.to_dict())
         flat = flatten_record(rule_rec)
         flat.update({"occurrenceID": occ, "method": "rule_ocr", "parse_failure": False})
         rows.append(flat)
         if backend != "none":
-            retrieved = retrieve_context(text, corpus, top_k=top_k) if rag_enabled and top_k > 0 else []
+            retrieved = retrieve_context(prompt_text, corpus, top_k=top_k) if rag_enabled and top_k > 0 else []
             ctx = format_context_for_prompt(retrieved)
-            prompt = f"Context:\n{ctx}\n\nOCR text:\n{text}" if retrieved else f"OCR text:\n{text}"
+            prompt = f"Context:\n{ctx}\n\nOCR text:\n{prompt_text}" if retrieved else f"OCR text:\n{prompt_text}"
             messages = [
                 {"role": "system", "content": "Extract herbarium label fields as JSON. Return one object with keys catalogNumber, scientificName, recordedBy, eventDate, country, stateProvince, decimalLatitude, decimalLongitude, and typeStatus. Each field must be an object with value, confidence, and evidence_span. Return JSON only."},
                 {"role": "user", "content": prompt},

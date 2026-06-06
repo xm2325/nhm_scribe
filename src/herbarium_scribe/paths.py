@@ -25,6 +25,7 @@ def ensure_dirs(cfg: dict[str, Any]) -> dict[str, Path]:
         "raw_images": data_dir / "raw" / "images",
         "interim": data_dir / "interim",
         "crops": data_dir / "interim" / "crops",
+        "hespi": data_dir / "interim" / "hespi_lite",
         "ocr": data_dir / "interim" / "ocr",
         "llm": data_dir / "interim" / "llm",
         "processed": data_dir / "processed",

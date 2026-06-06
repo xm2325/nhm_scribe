@@ -9,7 +9,11 @@ import pandas as pd
 from .metadata import clean_str
 
 
-def detect_layout(records: pd.DataFrame, image_manifest: pd.DataFrame, cfg: dict[str, Any], paths: dict[str, Path]) -> pd.DataFrame:
+def _detect_full_image_layout(
+    records: pd.DataFrame,
+    image_manifest: pd.DataFrame,
+    paths: dict[str, Path],
+) -> pd.DataFrame:
     manifest = image_manifest.set_index("occurrenceID") if len(image_manifest) else pd.DataFrame()
     rows = []
     for _, row in records.iterrows():
@@ -38,12 +42,23 @@ def detect_layout(records: pd.DataFrame, image_manifest: pd.DataFrame, cfg: dict
             "region_label": "label",
             "region_type": "label",
             "layout_method": method,
+            "layout_confidence": "",
             "bbox": json.dumps(bbox),
             "image_path": image_path,
             "crop_path": crop_path,
             "fixture_label_text": clean_str(row.get("fixture_label_text", "")),
         })
-    out = pd.DataFrame(rows)
+    return pd.DataFrame(rows)
+
+
+def detect_layout(records: pd.DataFrame, image_manifest: pd.DataFrame, cfg: dict[str, Any], paths: dict[str, Path]) -> pd.DataFrame:
+    strategy = clean_str(cfg.get("layout", {}).get("strategy", "auto")).lower()
+    if strategy == "hespi_lite":
+        from .hespi_layout import detect_hespi_lite_layout
+
+        out = detect_hespi_lite_layout(records, image_manifest, cfg, paths)
+    else:
+        out = _detect_full_image_layout(records, image_manifest, paths)
     out.to_csv(paths["processed"] / "layout_boxes.csv", index=False)
     with (paths["processed"] / "layout_boxes.jsonl").open("w", encoding="utf-8") as f:
         for rec in out.to_dict(orient="records"):

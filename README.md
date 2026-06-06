@@ -60,6 +60,12 @@ streamlit run streamlit_app.py
 
 For live DeepSeek calls, configure `DEEPSEEK_API_KEY`, `DEEPSEEK_BASE_URL`, and `DEEPSEEK_MODEL` in your environment or Streamlit secrets. See [docs/streamlit_mvp.md](docs/streamlit_mvp.md) for deployment notes.
 
+## Hespi-lite POC
+
+The optional Hespi-lite path uses Hespi's herbarium-specific sheet component and label field detectors, then keeps this repository's Tesseract, DeepSeek no-RAG, schema, and evaluation stages. It includes a same-record 20-image comparison against full-image OCR.
+
+Run the manual **Hespi-lite POC** GitHub Actions workflow, or see [docs/hespi_lite_poc.md](docs/hespi_lite_poc.md). Hespi is an optional dependency because it requires Python 3.10/3.11 and a substantially larger PyTorch stack.
+
 ## Cloud demo artifacts
 
 GitHub Actions runs the same quick demo on an Ubuntu runner whenever `main` is pushed, on pull requests, or when the `demo artifacts` workflow is started manually. The workflow installs the package, runs `pytest`, runs:

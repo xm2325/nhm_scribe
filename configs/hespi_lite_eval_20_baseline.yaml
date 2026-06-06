@@ -1,0 +1,52 @@
+extends: configs/default.yaml
+method_name: deepseek_v4_pro_no_rag
+project:
+  random_state: 42
+paths:
+  data_dir: data/experiments/hespi_lite_baseline
+  reports_dir: reports/hespi_lite_poc
+experiment:
+  mode: real_image
+  title: "Hespi-lite POC Baseline: Full-Image OCR + DeepSeek"
+metadata:
+  source: zenodo
+  dataset_label: Zenodo 6372393
+  record_id: "6372393"
+  cache_csv: data/raw/metadata/zenodo_6372393_links.csv
+sampling:
+  demo_size: 2
+  eval_size: 20
+  stratify_by: institutionCode
+  prefer_institution_disjoint: true
+image:
+  allow_download: true
+  output_subdir: real_eval_20
+  timeout_seconds: 60
+layout:
+  strategy: full_image
+ocr:
+  backend: tesseract
+  allow_fixture_text: false
+  include_region_labels_in_prompt: false
+llm:
+  backend: deepseek_api
+  base_url: https://api.deepseek.com
+  model_name: deepseek-v4-pro
+  temperature: 0.0
+  max_tokens: 12000
+  timeout_seconds: 300
+  retries: 3
+  retry_backoff_seconds: 20
+  min_interval_seconds: 1.0
+rag:
+  enabled: false
+  use_demo_examples: false
+  top_k: 0
+outputs:
+  prefix: hespi_lite_eval20_baseline
+  prediction_name: deepseek_no_rag
+  llm_artifact_family: hespi_lite_eval20_baseline
+  llm_outputs_name: hespi_lite_eval20_baseline_no_rag_outputs.jsonl
+  llm_diagnostics_name: hespi_lite_eval20_baseline_no_rag_diagnostics.csv
+  llm_diagnostics_json_name: hespi_lite_eval20_baseline_no_rag_diagnostics.json
+  report_name: hespi_lite_eval20_baseline_report.md
