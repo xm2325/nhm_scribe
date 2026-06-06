@@ -51,7 +51,10 @@ jobs:
         run: python -m pytest
 
       - name: Build validated shared image set
-        run: python scripts/prepare_hespi_v2_paired_eval.py
+        run: |
+          mkdir -p reports/hespi_v2
+          set -o pipefail
+          python scripts/prepare_hespi_v2_paired_eval.py 2>&1 | tee reports/hespi_v2/acquisition.log
 
       - name: Run A full-image OCR
         run: python scripts/run_pipeline.py --config configs/hespi_v2_eval20_full_image.yaml

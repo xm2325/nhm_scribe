@@ -12,6 +12,9 @@ metadata:
   dataset_label: Zenodo 6372393
   record_id: "6372393"
   cache_csv: data/raw/metadata/zenodo_6372393_links.csv
+  timeout_seconds: 90
+  retries: 4
+  retry_backoff_seconds: 10
 sampling:
   demo_size: 2
   eval_size: 35

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import re
+import time
 from pathlib import Path
 from typing import Any
 from urllib.parse import quote
@@ -15,6 +16,7 @@ REQUIRED_COLUMNS = [
     "recordedBy", "eventDate", "country", "stateProvince",
     "decimalLatitude", "decimalLongitude", "typeStatus", "image_url",
 ]
+RETRYABLE_HTTP_STATUS = {429, 500, 502, 503, 504}
 
 
 def clean_str(x: Any) -> str:
@@ -40,34 +42,82 @@ def _normalise_record_columns(df: pd.DataFrame) -> pd.DataFrame:
     return df
 
 
-def _zenodo_csv_url(record_id: str, timeout: int = 30) -> str:
-    api_url = f"https://zenodo.org/api/records/{record_id}"
+def _zenodo_csv_urls(record_id: str, explicit_url: str = "") -> list[str]:
+    preferred = ["Data and Links excl extensions.csv", "Data and Links.csv"]
+    urls = [clean_str(explicit_url)] if clean_str(explicit_url) else []
+    for name in preferred:
+        quoted = quote(name)
+        urls.extend([
+            f"https://zenodo.org/records/{record_id}/files/{quoted}?download=1",
+            f"https://zenodo.org/api/records/{record_id}/files/{quoted}/content",
+        ])
+    return list(dict.fromkeys(url for url in urls if url))
+
+
+def _retry_delay(response: requests.Response | None, attempt: int, backoff_seconds: float) -> float:
+    retry_after = response.headers.get("Retry-After", "") if response is not None else ""
     try:
-        resp = requests.get(api_url, timeout=timeout, headers={"User-Agent": "herbarium-scribe-demo/0.1"})
-        resp.raise_for_status()
-        data = resp.json()
-        files = data.get("files", [])
-        for preferred in ["Data and Links excl extensions.csv", "Data and Links.csv"]:
-            for item in files:
-                if item.get("key") == preferred:
-                    return item.get("links", {}).get("self", "")
-    except Exception:
-        pass
-    quoted = quote("Data and Links excl extensions.csv")
-    return f"https://zenodo.org/api/records/{record_id}/files/{quoted}/content"
+        return min(max(0.0, float(retry_after)), 120.0)
+    except (TypeError, ValueError):
+        return min(backoff_seconds * (2 ** attempt), 120.0)
+
+
+def _download_zenodo_csv(
+    urls: list[str],
+    cache_path: Path,
+    timeout: int,
+    retries: int,
+    retry_backoff_seconds: float,
+) -> None:
+    temp_path = cache_path.with_suffix(cache_path.suffix + ".part")
+    errors: list[str] = []
+    for url in urls:
+        for attempt in range(max(0, retries) + 1):
+            response = None
+            try:
+                response = requests.get(
+                    url,
+                    timeout=timeout,
+                    headers={"User-Agent": "herbarium-scribe-demo/0.2"},
+                )
+                if response.status_code in RETRYABLE_HTTP_STATUS and attempt < retries:
+                    time.sleep(_retry_delay(response, attempt, retry_backoff_seconds))
+                    continue
+                response.raise_for_status()
+                temp_path.write_bytes(response.content)
+                header = pd.read_csv(temp_path, nrows=0)
+                if "jpegURL" not in header.columns:
+                    raise ValueError("downloaded CSV does not contain jpegURL")
+                temp_path.replace(cache_path)
+                return
+            except Exception as exc:
+                status_code = getattr(getattr(exc, "response", None), "status_code", "")
+                errors.append(f"{url} attempt {attempt + 1}: {type(exc).__name__} {status_code}".strip())
+                temp_path.unlink(missing_ok=True)
+                retryable = not status_code or status_code in RETRYABLE_HTTP_STATUS
+                if retryable and attempt < retries:
+                    time.sleep(_retry_delay(response, attempt, retry_backoff_seconds))
+                    continue
+                break
+    raise RuntimeError("Zenodo metadata download failed after retries: " + "; ".join(errors[-8:]))
 
 
 def load_zenodo_metadata(cfg: dict[str, Any], paths: dict[str, Path] | None = None) -> pd.DataFrame:
     mcfg = cfg.get("metadata", {})
     record_id = clean_str(mcfg.get("record_id", "6372393")) or "6372393"
     timeout = int(mcfg.get("timeout_seconds", 60))
+    retries = int(mcfg.get("retries", 3))
+    retry_backoff_seconds = float(mcfg.get("retry_backoff_seconds", 10))
     cache_path = resolve_path(mcfg.get("cache_csv", f"data/raw/metadata/zenodo_{record_id}_links.csv"), repo_root())
     cache_path.parent.mkdir(parents=True, exist_ok=True)
     if not cache_path.exists() or bool(mcfg.get("force_download", False)):
-        csv_url = clean_str(mcfg.get("csv_url", "")) or _zenodo_csv_url(record_id, timeout=timeout)
-        resp = requests.get(csv_url, timeout=timeout, headers={"User-Agent": "herbarium-scribe-demo/0.1"})
-        resp.raise_for_status()
-        cache_path.write_bytes(resp.content)
+        _download_zenodo_csv(
+            _zenodo_csv_urls(record_id, clean_str(mcfg.get("csv_url", ""))),
+            cache_path,
+            timeout=timeout,
+            retries=retries,
+            retry_backoff_seconds=retry_backoff_seconds,
+        )
     df = pd.read_csv(cache_path, dtype=str).fillna("")
     if "jpegURL" not in df.columns:
         df["jpegURL"] = ""
