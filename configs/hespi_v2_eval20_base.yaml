@@ -1,0 +1,44 @@
+extends: configs/default.yaml
+method_name: deepseek_v4_pro_no_rag
+project:
+  random_state: 42
+paths:
+  reports_dir: reports/hespi_v2
+experiment:
+  mode: real_image
+metadata:
+  source: zenodo
+  dataset_label: Zenodo 6372393
+  record_id: "6372393"
+  cache_csv: data/raw/metadata/zenodo_6372393_links.csv
+sampling:
+  frozen_split_dir: data/experiments/hespi_v2_shared/processed
+  demo_size: 2
+  eval_size: 20
+  stratify_by: institutionCode
+  prefer_institution_disjoint: true
+image:
+  allow_download: false
+  shared_manifest_csv: data/experiments/hespi_v2_shared/processed/paired_eval_manifest.csv
+  min_bytes: 4096
+ocr:
+  backend: tesseract
+  allow_fixture_text: false
+llm:
+  backend: deepseek_api
+  base_url: https://api.deepseek.com
+  model_name: deepseek-v4-pro
+  temperature: 0.0
+  max_tokens: 12000
+  timeout_seconds: 300
+  retries: 3
+  retry_backoff_seconds: 20
+  min_interval_seconds: 1.0
+  evidence_gate:
+    enabled: true
+    require_image: true
+    min_alphanumeric_characters: 10
+rag:
+  enabled: false
+  use_demo_examples: false
+  top_k: 0

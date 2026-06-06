@@ -6,7 +6,7 @@ from pathlib import Path
 from typing import Any
 
 import pandas as pd
-from PIL import Image
+from PIL import Image, ImageOps
 
 from .download import safe_filename
 from .logging_utils import get_logger
@@ -98,10 +98,22 @@ def _clamp_bbox(bbox: list[int], width: int, height: int) -> list[int]:
     return [x0, y0, x1, y1]
 
 
-def _crop(image: Image.Image, bbox: list[int], out_path: Path) -> tuple[list[int], str]:
-    fixed = _clamp_bbox(bbox, image.width, image.height)
+def _crop(
+    image: Image.Image,
+    bbox: list[int],
+    out_path: Path,
+    padding_fraction: float = 0.0,
+    white_border_pixels: int = 0,
+) -> tuple[list[int], str]:
+    x0, y0, x1, y1 = bbox
+    pad_x = int(round((x1 - x0) * max(0.0, padding_fraction)))
+    pad_y = int(round((y1 - y0) * max(0.0, padding_fraction)))
+    fixed = _clamp_bbox([x0 - pad_x, y0 - pad_y, x1 + pad_x, y1 + pad_y], image.width, image.height)
     out_path.parent.mkdir(parents=True, exist_ok=True)
-    image.crop(tuple(fixed)).convert("RGB").save(out_path)
+    crop = image.crop(tuple(fixed)).convert("RGB")
+    if white_border_pixels > 0:
+        crop = ImageOps.expand(crop, border=white_border_pixels, fill="white")
+    crop.save(out_path)
     return fixed, str(out_path)
 
 
@@ -124,6 +136,8 @@ def _fallback_row(
     image_path: str,
     paths: dict[str, Path],
     method: str,
+    tesseract_config: str = "",
+    prompt_header: str = "",
 ) -> dict[str, Any]:
     occurrence_id = clean_str(record.get("occurrenceID"))
     crop_path = ""
@@ -145,6 +159,9 @@ def _fallback_row(
         "region_type": "full_image",
         "layout_method": method,
         "layout_confidence": "",
+        "evidence_source": "whole_sheet",
+        "prompt_header": prompt_header,
+        "ocr_tesseract_config": tesseract_config,
         "bbox": json.dumps(bbox),
         "image_path": image_path,
         "crop_path": crop_path,
@@ -171,8 +188,29 @@ def detect_hespi_lite_layout(
     field_resolution = int(layout_cfg.get("label_field_resolution", 1280))
     component_confidence = float(layout_cfg.get("component_confidence", 0.25))
     field_confidence = float(layout_cfg.get("field_confidence", 0.20))
+    strategy = clean_str(layout_cfg.get("strategy", "hespi_lite")).lower()
+    hybrid = strategy == "hespi_hybrid"
     max_primary_labels = int(layout_cfg.get("max_primary_labels", 2))
     max_fields = int(layout_cfg.get("max_fields_per_label", 20))
+    field_padding = float(layout_cfg.get("field_padding_fraction", 0.08))
+    field_white_border = int(layout_cfg.get("field_white_border_pixels", 10))
+    primary_padding = float(layout_cfg.get("primary_label_padding_fraction", 0.02))
+    whole_sheet_psm = clean_str(layout_cfg.get("whole_sheet_tesseract_config", "--psm 11"))
+    primary_label_psm = clean_str(layout_cfg.get("primary_label_tesseract_config", "--psm 6"))
+    field_psm = clean_str(layout_cfg.get("field_tesseract_config", "--psm 7"))
+    supplemental_psm = clean_str(layout_cfg.get("supplemental_tesseract_config", "--psm 7"))
+    structured_headers = bool(layout_cfg.get("structured_prompt_headers", False))
+    supplemental_headers = {
+        _normalise_label(key): clean_str(value)
+        for key, value in layout_cfg.get("supplemental_component_headers", {
+            "barcode": "FIELD=catalog_number",
+            "number": "FIELD=catalog_number",
+            "database_label": "FIELD=catalog_number",
+            "stamp": "FIELD=type_status",
+            "annotation_label": "FIELD=type_status",
+            "type_label": "FIELD=type_status",
+        }).items()
+    }
     configured_primary = layout_cfg.get("primary_label_classes", [])
     primary_classes = {
         _normalise_label(value) for value in configured_primary
@@ -224,13 +262,43 @@ def detect_hespi_lite_layout(
 
         if not image_path or not Path(image_path).exists():
             fallback_reason = "missing_image"
-            selected_rows.append(_fallback_row(record, image_path, paths, "hespi_missing_image_fallback"))
+            selected_rows.append(_fallback_row(
+                record,
+                image_path,
+                paths,
+                "hespi_missing_image_fallback",
+                whole_sheet_psm,
+                "SOURCE=whole_sheet" if structured_headers else "",
+            ))
         elif hespi is None or sheet_model is None or field_model is None:
             fallback_reason = f"hespi_load_failed:{load_error}"
-            selected_rows.append(_fallback_row(record, image_path, paths, "hespi_unavailable_full_image_fallback"))
+            selected_rows.append(_fallback_row(
+                record,
+                image_path,
+                paths,
+                "hespi_unavailable_full_image_fallback",
+                whole_sheet_psm,
+                "SOURCE=whole_sheet" if structured_headers else "",
+            ))
         else:
             try:
                 source_image = Image.open(image_path).convert("RGB")
+                if hybrid:
+                    selected_rows.append({
+                        "occurrenceID": occurrence_id,
+                        "region_id": f"{occurrence_id}::whole_sheet",
+                        "region_label": "whole_sheet",
+                        "region_type": "whole_sheet",
+                        "layout_method": "hespi_hybrid_whole_sheet",
+                        "layout_confidence": "",
+                        "evidence_source": "whole_sheet",
+                        "prompt_header": "SOURCE=whole_sheet" if structured_headers else "",
+                        "ocr_tesseract_config": whole_sheet_psm,
+                        "bbox": json.dumps([0, 0, source_image.width, source_image.height]),
+                        "image_path": image_path,
+                        "crop_path": image_path,
+                        "fixture_label_text": clean_str(record.get("fixture_label_text", "")),
+                    })
                 components, sheet_result = _predict(
                     sheet_model,
                     Path(image_path),
@@ -246,7 +314,13 @@ def detect_hespi_lite_layout(
                 for index, component in enumerate(components):
                     label = component["label"]
                     component_path = record_dir / "components" / f"{index:02d}_{label}.jpg"
-                    fixed_bbox, crop_path = _crop(source_image, component["bbox"], component_path)
+                    fixed_bbox, crop_path = _crop(
+                        source_image,
+                        component["bbox"],
+                        component_path,
+                        padding_fraction=primary_padding if label in primary_classes else field_padding,
+                        white_border_pixels=field_white_border if label not in primary_classes else 0,
+                    )
                     is_primary = label in primary_classes and len(primary) < max_primary_labels
                     component_rows.append({
                         "occurrenceID": occurrence_id,
@@ -259,6 +333,22 @@ def detect_hespi_lite_layout(
                         "selected_for_field_detection": is_primary,
                         "annotation_path": sheet_annotation,
                     })
+                    if hybrid and label in supplemental_headers:
+                        selected_rows.append({
+                            "occurrenceID": occurrence_id,
+                            "region_id": f"{occurrence_id}::component_{index}_{label}",
+                            "region_label": label,
+                            "region_type": label,
+                            "layout_method": "hespi_hybrid_supplemental_component",
+                            "layout_confidence": component["confidence"],
+                            "evidence_source": f"component:{label}",
+                            "prompt_header": supplemental_headers[label] if structured_headers else label,
+                            "ocr_tesseract_config": supplemental_psm,
+                            "bbox": json.dumps(fixed_bbox),
+                            "image_path": image_path,
+                            "crop_path": crop_path,
+                            "fixture_label_text": clean_str(record.get("fixture_label_text", "")),
+                        })
                     if is_primary:
                         primary.append({
                             **component,
@@ -270,6 +360,22 @@ def detect_hespi_lite_layout(
                 for primary_index, primary_item in enumerate(primary):
                     primary_path = Path(primary_item["crop_path"])
                     primary_image = Image.open(primary_path).convert("RGB")
+                    if hybrid:
+                        selected_rows.append({
+                            "occurrenceID": occurrence_id,
+                            "region_id": f"{occurrence_id}::primary_label_{primary_index}",
+                            "region_label": "primary_specimen_label",
+                            "region_type": "primary_specimen_label",
+                            "layout_method": "hespi_hybrid_primary_label",
+                            "layout_confidence": primary_item["confidence"],
+                            "evidence_source": "primary_label",
+                            "prompt_header": "SOURCE=primary_label" if structured_headers else "primary_specimen_label",
+                            "ocr_tesseract_config": primary_label_psm,
+                            "bbox": json.dumps(primary_item["bbox"]),
+                            "image_path": image_path,
+                            "crop_path": str(primary_path),
+                            "fixture_label_text": clean_str(record.get("fixture_label_text", "")),
+                        })
                     fields, field_result = _predict(
                         field_model,
                         primary_path,
@@ -289,7 +395,13 @@ def detect_hespi_lite_layout(
                     for field_index, field in enumerate(selected_fields):
                         label = field["label"]
                         field_path = record_dir / "fields" / f"{primary_index:02d}_{field_index:02d}_{label}.jpg"
-                        fixed_bbox, crop_path = _crop(primary_image, field["bbox"], field_path)
+                        fixed_bbox, crop_path = _crop(
+                            primary_image,
+                            field["bbox"],
+                            field_path,
+                            padding_fraction=field_padding,
+                            white_border_pixels=field_white_border,
+                        )
                         parent_x0, parent_y0, _, _ = primary_item["bbox"]
                         global_bbox = [
                             fixed_bbox[0] + parent_x0,
@@ -305,6 +417,9 @@ def detect_hespi_lite_layout(
                             "region_type": label,
                             "layout_method": "hespi_lite_label_field",
                             "layout_confidence": field["confidence"],
+                            "evidence_source": f"field:{label}",
+                            "prompt_header": f"FIELD={label}" if structured_headers else label,
+                            "ocr_tesseract_config": field_psm,
                             "bbox": json.dumps(fixed_bbox),
                             "bbox_coordinate_space": "primary_specimen_label",
                             "global_bbox": json.dumps(global_bbox),
@@ -321,7 +436,7 @@ def detect_hespi_lite_layout(
                         })
                         n_fields += 1
 
-                if not selected_rows and primary:
+                if not hybrid and not selected_rows and primary:
                     fallback_reason = "no_label_fields_detected"
                     for primary_index, primary_item in enumerate(primary):
                         selected_rows.append({
@@ -331,28 +446,40 @@ def detect_hespi_lite_layout(
                             "region_type": "primary_specimen_label",
                             "layout_method": "hespi_primary_label_fallback",
                             "layout_confidence": primary_item["confidence"],
+                            "evidence_source": "primary_label",
+                            "prompt_header": "SOURCE=primary_label" if structured_headers else "primary_specimen_label",
+                            "ocr_tesseract_config": primary_label_psm,
                             "bbox": json.dumps(primary_item["bbox"]),
                             "image_path": image_path,
                             "crop_path": primary_item["crop_path"],
                             "fixture_label_text": clean_str(record.get("fixture_label_text", "")),
                         })
-                elif not selected_rows:
+                elif not hybrid and not selected_rows:
                     fallback_reason = "no_primary_label_detected"
                     selected_rows.append(_fallback_row(
                         record,
                         image_path,
                         paths,
                         "hespi_no_primary_label_full_image_fallback",
+                        whole_sheet_psm,
+                        "SOURCE=whole_sheet" if structured_headers else "",
                     ))
+                elif hybrid and not primary:
+                    fallback_reason = "no_primary_label_detected"
+                elif hybrid and n_fields == 0:
+                    fallback_reason = "no_label_fields_detected"
             except Exception as exc:
                 fallback_reason = f"hespi_detection_failed:{type(exc).__name__}:{exc}"
                 logger.warning("Hespi-lite failed for %s: %s", occurrence_id, exc)
-                selected_rows.append(_fallback_row(
-                    record,
-                    image_path,
-                    paths,
-                    "hespi_detection_error_full_image_fallback",
-                ))
+                if not selected_rows:
+                    selected_rows.append(_fallback_row(
+                        record,
+                        image_path,
+                        paths,
+                        "hespi_detection_error_full_image_fallback",
+                        whole_sheet_psm,
+                        "SOURCE=whole_sheet" if structured_headers else "",
+                    ))
 
         layout_rows.extend(selected_rows)
         diagnostic_rows.append({
@@ -377,7 +504,8 @@ def detect_hespi_lite_layout(
     ]
     field_columns = [
         "occurrenceID", "region_id", "region_label", "region_type", "layout_method",
-        "layout_confidence", "bbox", "bbox_coordinate_space", "global_bbox",
+        "layout_confidence", "evidence_source", "prompt_header", "ocr_tesseract_config",
+        "bbox", "bbox_coordinate_space", "global_bbox",
         "parent_bbox", "image_path", "crop_path",
         "primary_label_crop_path", "fixture_label_text", "field_annotation_path",
     ]

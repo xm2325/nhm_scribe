@@ -1,0 +1,32 @@
+extends: configs/default.yaml
+project:
+  random_state: 42
+paths:
+  data_dir: data/experiments/hespi_v2_shared
+  reports_dir: reports/hespi_v2
+experiment:
+  mode: real_image
+  title: "Hespi v2 Shared Image Acquisition"
+metadata:
+  source: zenodo
+  dataset_label: Zenodo 6372393
+  record_id: "6372393"
+  cache_csv: data/raw/metadata/zenodo_6372393_links.csv
+sampling:
+  demo_size: 2
+  eval_size: 35
+  stratify_by: institutionCode
+  prefer_institution_disjoint: true
+paired_eval:
+  target_eval_size: 20
+image:
+  allow_download: true
+  output_subdir: paired_eval20
+  timeout_seconds: 90
+  retries: 4
+  retry_backoff_seconds: 10
+  min_bytes: 4096
+llm:
+  backend: none
+outputs:
+  prefix: hespi_v2_acquisition

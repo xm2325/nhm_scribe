@@ -1,0 +1,142 @@
+name: Hespi v2 strict paired evaluation
+
+on:
+  workflow_dispatch:
+
+jobs:
+  eval20:
+    runs-on: ubuntu-latest
+    timeout-minutes: 360
+    env:
+      DEEPSEEK_API_KEY: ${{ secrets.DEEPSEEK_API_KEY_SELF }}
+      DEEPSEEK_BASE_URL: https://api.deepseek.com
+      DEEPSEEK_MODEL: deepseek-v4-pro
+      DEEPSEEK_MIN_INTERVAL_SECONDS: "1.0"
+    steps:
+      - name: Checkout repository anonymously
+        run: |
+          git init .
+          git remote add origin https://github.com/${{ github.repository }}.git
+          git fetch --depth=1 origin ${{ github.sha }}
+          git checkout --detach FETCH_HEAD
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+
+      - name: Cache Hespi model downloads
+        uses: actions/cache@v5
+        with:
+          path: ~/.cache/hespi
+          key: hespi-0.6.2-${{ runner.os }}
+
+      - name: Install OCR system dependency
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y tesseract-ocr
+
+      - name: Install package with Hespi
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -e '.[dev,hespi]'
+
+      - name: Check DeepSeek official API configuration
+        run: |
+          if [ -z "${DEEPSEEK_API_KEY}" ]; then
+            echo "::error::Repository secret DEEPSEEK_API_KEY_SELF is not configured"
+            exit 1
+          fi
+
+      - name: Run tests
+        run: python -m pytest
+
+      - name: Build validated shared image set
+        run: python scripts/prepare_hespi_v2_paired_eval.py
+
+      - name: Run A full-image OCR
+        run: python scripts/run_pipeline.py --config configs/hespi_v2_eval20_full_image.yaml
+
+      - name: Run B field-crop-only OCR
+        run: python scripts/run_pipeline.py --config configs/hespi_v2_eval20_field_only.yaml
+
+      - name: Run C hybrid OCR
+        run: python scripts/run_pipeline.py --config configs/hespi_v2_eval20_hybrid.yaml
+
+      - name: Build strict paired comparison
+        run: python scripts/compare_hespi_v2.py
+
+      - name: Verify hashes, evidence gate, and paired size
+        run: |
+          python - <<'PY'
+          import json
+          from pathlib import Path
+          import pandas as pd
+
+          shared = pd.read_csv("data/experiments/hespi_v2_shared/processed/paired_eval20_manifest.csv", dtype=str).fillna("")
+          if len(shared) != 20:
+              raise SystemExit(f"Expected 20 frozen paired records, got {len(shared)}")
+          if shared["sha256"].eq("").any() or shared["image_path"].eq("").any():
+              raise SystemExit("Frozen paired manifest contains a missing image or hash")
+
+          specs = {
+              "full_image": ("data/experiments/hespi_v2_full_image", "hespi_v2_full_image", "hespi_v2_full_image_outputs.jsonl"),
+              "field_only": ("data/experiments/hespi_v2_field_only", "hespi_v2_field_only", "hespi_v2_field_only_outputs.jsonl"),
+              "hybrid": ("data/experiments/hespi_v2_hybrid", "hespi_v2_hybrid", "hespi_v2_hybrid_outputs.jsonl"),
+          }
+          for name, (root_value, prefix, llm_name) in specs.items():
+              root = Path(root_value)
+              manifest = pd.read_csv(root / "processed" / f"{prefix}_image_manifest.csv", dtype=str).fillna("")
+              merged = shared[["occurrenceID", "sha256"]].merge(
+                  manifest[["occurrenceID", "sha256"]],
+                  on="occurrenceID",
+                  suffixes=("_shared", "_pipeline"),
+              )
+              if len(merged) != 20 or not merged["sha256_shared"].eq(merged["sha256_pipeline"]).all():
+                  raise SystemExit(f"{name} did not use the exact shared SHA-256 image set")
+
+              ocr = pd.read_csv(root / "processed" / f"{prefix}_ocr_by_region.csv", dtype=str).fillna("")
+              lengths = pd.to_numeric(ocr["text_length"], errors="coerce").fillna(0)
+              per_record = ocr.assign(length=lengths).groupby("occurrenceID")["length"].sum()
+              empty_ids = set(shared["occurrenceID"]) - set(per_record[per_record.gt(0)].index)
+              rows = [
+                  json.loads(line)
+                  for line in (root / "interim/llm" / llm_name).read_text(encoding="utf-8").splitlines()
+                  if line.strip()
+              ]
+              bad_calls = [
+                  row["occurrenceID"]
+                  for row in rows
+                  if row.get("occurrenceID") in empty_ids and row.get("llm_call_attempted", True)
+              ]
+              if bad_calls:
+                  raise SystemExit(f"{name} called DeepSeek with empty OCR evidence: {bad_calls}")
+
+          report = Path("reports/hespi_v2/hespi_v2_paired_report.md")
+          if not report.exists():
+              raise SystemExit("Strict paired report was not generated")
+          print(report)
+          PY
+
+      - name: Upload Hespi v2 paired outputs
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: herbarium-scribe-hespi-v2-paired-${{ github.run_id }}
+          retention-days: 30
+          path: |
+            data/experiments/hespi_v2_shared/processed/
+            data/experiments/hespi_v2_shared/raw/images/
+            data/experiments/hespi_v2_full_image/processed/
+            data/experiments/hespi_v2_full_image/interim/ocr/
+            data/experiments/hespi_v2_full_image/interim/llm/
+            data/experiments/hespi_v2_field_only/processed/
+            data/experiments/hespi_v2_field_only/interim/crops/
+            data/experiments/hespi_v2_field_only/interim/hespi_lite/
+            data/experiments/hespi_v2_field_only/interim/ocr/
+            data/experiments/hespi_v2_field_only/interim/llm/
+            data/experiments/hespi_v2_hybrid/processed/
+            data/experiments/hespi_v2_hybrid/interim/crops/
+            data/experiments/hespi_v2_hybrid/interim/hespi_lite/
+            data/experiments/hespi_v2_hybrid/interim/ocr/
+            data/experiments/hespi_v2_hybrid/interim/llm/
+            reports/hespi_v2/

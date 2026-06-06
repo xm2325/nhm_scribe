@@ -1,0 +1,24 @@
+extends: configs/hespi_v2_eval20_field_only.yaml
+paths:
+  data_dir: data/experiments/hespi_v2_hybrid
+experiment:
+  title: "Hespi v2 C: Hybrid OCR Evidence"
+layout:
+  strategy: hespi_hybrid
+  whole_sheet_tesseract_config: "--psm 11"
+  supplemental_tesseract_config: "--psm 7"
+  supplemental_component_headers:
+    barcode: FIELD=catalog_number
+    number: FIELD=catalog_number
+    database_label: FIELD=catalog_number
+    stamp: FIELD=type_status
+    annotation_label: FIELD=type_status
+    type_label: FIELD=type_status
+outputs:
+  prefix: hespi_v2_hybrid
+  prediction_name: deepseek_no_rag
+  llm_artifact_family: hespi_v2_hybrid
+  llm_outputs_name: hespi_v2_hybrid_outputs.jsonl
+  llm_diagnostics_name: hespi_v2_hybrid_diagnostics.csv
+  llm_diagnostics_json_name: hespi_v2_hybrid_diagnostics.json
+  report_name: hespi_v2_hybrid_report.md

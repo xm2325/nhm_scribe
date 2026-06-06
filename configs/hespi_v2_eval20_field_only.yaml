@@ -1,0 +1,29 @@
+extends: configs/hespi_v2_eval20_base.yaml
+paths:
+  data_dir: data/experiments/hespi_v2_field_only
+experiment:
+  title: "Hespi v2 B: Field-Crop-Only OCR"
+layout:
+  strategy: hespi_lite
+  structured_prompt_headers: true
+  gpu: false
+  component_confidence: 0.25
+  field_confidence: 0.20
+  sheet_component_resolution: 1280
+  label_field_resolution: 1280
+  max_primary_labels: 2
+  max_fields_per_label: 20
+  primary_label_tesseract_config: "--psm 6"
+  field_tesseract_config: "--psm 7"
+  field_padding_fraction: 0.08
+  field_white_border_pixels: 10
+ocr:
+  include_region_labels_in_prompt: true
+outputs:
+  prefix: hespi_v2_field_only
+  prediction_name: deepseek_no_rag
+  llm_artifact_family: hespi_v2_field_only
+  llm_outputs_name: hespi_v2_field_only_outputs.jsonl
+  llm_diagnostics_name: hespi_v2_field_only_diagnostics.csv
+  llm_diagnostics_json_name: hespi_v2_field_only_diagnostics.json
+  report_name: hespi_v2_field_only_report.md

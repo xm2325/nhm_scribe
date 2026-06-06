@@ -84,13 +84,14 @@ def run_ocr(layout_df: pd.DataFrame, cfg: dict[str, Any], paths: dict[str, Path]
         conf = None
         engine_used = backend
         used_fixture_text = False
+        tesseract_config = clean_str(row.get("ocr_tesseract_config", "")) or clean_str(ocfg.get("tesseract_config", ""))
         if backend == "paddle":
             text, conf, status = ocr_image_paddle(crop_path)
             if not text:
                 text, conf2, status2 = ocr_image_tesseract(
                     crop_path,
                     lang=ocfg.get("tesseract_lang", "eng"),
-                    config=clean_str(ocfg.get("tesseract_config", "")),
+                    config=tesseract_config,
                 )
                 engine_used = "tesseract_after_paddle_fallback"
                 conf = conf if conf is not None else conf2
@@ -99,7 +100,7 @@ def run_ocr(layout_df: pd.DataFrame, cfg: dict[str, Any], paths: dict[str, Path]
             text, conf, status = ocr_image_tesseract(
                 crop_path,
                 lang=ocfg.get("tesseract_lang", "eng"),
-                config=clean_str(ocfg.get("tesseract_config", "")),
+                config=tesseract_config,
             )
         if not text and allow_fixture and fixture_text:
             text = fixture_text
@@ -113,12 +114,19 @@ def run_ocr(layout_df: pd.DataFrame, cfg: dict[str, Any], paths: dict[str, Path]
         if "error:" in status or "missing" in status:
             error_message = status
         region_type = clean_str(row.get("region_type", row.get("region_label", "label")))
-        prompt_text = f"[{region_type}]\n{text}" if include_region_labels and text else text
+        prompt_header = clean_str(row.get("prompt_header", ""))
+        if prompt_header and text:
+            prompt_text = f"[{prompt_header}]\n{text}"
+        else:
+            prompt_text = f"[{region_type}]\n{text}" if include_region_labels and text else text
         rows.append({
             "occurrenceID": clean_str(row.get("occurrenceID")),
             "region_id": clean_str(row.get("region_id")),
             "region_label": clean_str(row.get("region_label", "label")),
             "region_type": region_type,
+            "evidence_source": clean_str(row.get("evidence_source", region_type)),
+            "prompt_header": prompt_header,
+            "tesseract_config": tesseract_config,
             "ocr_engine": engine_used,
             "ocr_status": status,
             "ocr_confidence": conf if conf is not None else "",

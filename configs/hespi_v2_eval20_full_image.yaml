@@ -1,0 +1,19 @@
+extends: configs/hespi_v2_eval20_base.yaml
+paths:
+  data_dir: data/experiments/hespi_v2_full_image
+experiment:
+  title: "Hespi v2 A: Full-Image OCR"
+layout:
+  strategy: full_image
+  structured_prompt_headers: true
+  whole_sheet_tesseract_config: "--psm 11"
+ocr:
+  include_region_labels_in_prompt: true
+outputs:
+  prefix: hespi_v2_full_image
+  prediction_name: deepseek_no_rag
+  llm_artifact_family: hespi_v2_full_image
+  llm_outputs_name: hespi_v2_full_image_outputs.jsonl
+  llm_diagnostics_name: hespi_v2_full_image_diagnostics.csv
+  llm_diagnostics_json_name: hespi_v2_full_image_diagnostics.json
+  report_name: hespi_v2_full_image_report.md

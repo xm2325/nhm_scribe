@@ -1,13 +1,15 @@
 from __future__ import annotations
 
 import json
+import os
+import re
 from pathlib import Path
 from typing import Any
 
 import pandas as pd
 
 from .config import load_config
-from .paths import ensure_dirs
+from .paths import ensure_dirs, repo_root, resolve_path
 from .metadata import load_metadata, save_metadata_copy, clean_str
 from .sampling import make_demo_eval_split, save_split_outputs
 from .download import run_download
@@ -46,9 +48,20 @@ def _write_prefixed_csv(df: pd.DataFrame, paths: dict[str, Path], cfg: dict[str,
 
 def stage_metadata(config_path: str | Path) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
     cfg, paths = load_runtime(config_path)
-    df = load_metadata(cfg)
-    save_metadata_copy(df, paths)
-    demo, eval_df, summary = make_demo_eval_split(df, cfg)
+    frozen_dir_value = clean_str(cfg.get("sampling", {}).get("frozen_split_dir", ""))
+    if frozen_dir_value:
+        frozen_dir = resolve_path(frozen_dir_value, repo_root())
+        demo = pd.read_csv(frozen_dir / "demo_set.csv", dtype=str).fillna("")
+        eval_df = pd.read_csv(frozen_dir / "eval_set.csv", dtype=str).fillna("")
+        summary = pd.read_csv(frozen_dir / "split_summary.csv", dtype=str).fillna("")
+        overlap = set(demo["occurrenceID"]) & set(eval_df["occurrenceID"])
+        if overlap:
+            raise ValueError(f"Frozen DEMO_SET and EVAL_SET overlap: {sorted(overlap)[:5]}")
+        save_metadata_copy(pd.concat([demo, eval_df], ignore_index=True), paths)
+    else:
+        df = load_metadata(cfg)
+        save_metadata_copy(df, paths)
+        demo, eval_df, summary = make_demo_eval_split(df, cfg)
     save_split_outputs(demo, eval_df, summary, paths["processed"])
     _write_prefixed_csv(demo, paths, cfg, "demo_set.csv")
     _write_prefixed_csv(eval_df, paths, cfg, "eval_set.csv")
@@ -195,6 +208,61 @@ def _parse_llm_json(text: str) -> dict[str, Any] | None:
     return None
 
 
+def _llm_static_metadata(cfg: dict[str, Any], backend: str) -> dict[str, Any]:
+    lcfg = cfg.get("llm", {})
+    if backend in {"deepseek", "deepseek_api"}:
+        return {
+            "backend": backend,
+            "requested_model": os.environ.get("DEEPSEEK_MODEL") or lcfg.get("model_name") or lcfg.get("model") or "deepseek-v4-pro",
+            "actual_model": "",
+            "content": "",
+            "error_message": "",
+            "endpoint_reachable": False,
+            "api_key_present": bool(os.environ.get("DEEPSEEK_API_KEY") or os.environ.get("DEEPSEEK_API_KEY_SELF")),
+            "base_url": os.environ.get("DEEPSEEK_BASE_URL") or lcfg.get("base_url") or "https://api.deepseek.com",
+            "min_interval_seconds": float(os.environ.get("DEEPSEEK_MIN_INTERVAL_SECONDS") or lcfg.get("min_interval_seconds") or 0),
+        }
+    return {
+        "backend": backend,
+        "requested_model": lcfg.get("model_name") or lcfg.get("model") or "",
+        "actual_model": "",
+        "content": "",
+        "error_message": "",
+        "endpoint_reachable": False,
+        "api_key_present": False,
+        "base_url": lcfg.get("base_url", ""),
+        "min_interval_seconds": float(lcfg.get("min_interval_seconds", 0) or 0),
+    }
+
+
+def _normalised_evidence_length(text: str) -> int:
+    return len(re.sub(r"[^A-Za-z0-9]+", "", clean_str(text)))
+
+
+def _llm_evidence_gate_reason(
+    occurrence_id: str,
+    prompt_text: str,
+    image_manifest: dict[str, dict[str, Any]],
+    cfg: dict[str, Any],
+) -> str:
+    gate = cfg.get("llm", {}).get("evidence_gate", {})
+    if not bool(gate.get("enabled", False)):
+        return ""
+    image_row = image_manifest.get(occurrence_id, {})
+    if bool(gate.get("require_image", True)):
+        image_path = clean_str(image_row.get("image_path", ""))
+        if not image_path or not Path(image_path).exists():
+            return "image_unavailable"
+        if str(image_row.get("paired_eligible", "true")).lower() in {"false", "0", "no"}:
+            return "image_not_paired_eligible"
+    if not clean_str(prompt_text):
+        return "empty_ocr_evidence"
+    minimum = int(gate.get("min_alphanumeric_characters", 1))
+    if _normalised_evidence_length(prompt_text) < minimum:
+        return "insufficient_ocr_evidence"
+    return ""
+
+
 def stage_extract(config_path: str | Path) -> pd.DataFrame:
     cfg, paths = load_runtime(config_path)
     backend = clean_str(cfg.get("llm", {}).get("backend", "none")).lower() or "none"
@@ -208,6 +276,12 @@ def stage_extract(config_path: str | Path) -> pd.DataFrame:
     ocr_combined = ocr_df.groupby("occurrenceID")["ocr_text"].apply("\n".join).to_dict()
     prompt_column = "ocr_prompt_text" if "ocr_prompt_text" in ocr_df.columns else "ocr_text"
     ocr_prompt_combined = ocr_df.groupby("occurrenceID")[prompt_column].apply("\n\n".join).to_dict()
+    manifest_path = paths["processed"] / "image_manifest.csv"
+    manifest_df = pd.read_csv(manifest_path, dtype=str).fillna("") if manifest_path.exists() else pd.DataFrame()
+    image_manifest = {
+        clean_str(row.get("occurrenceID")): row.to_dict()
+        for _, row in manifest_df.iterrows()
+    }
     demo_df = _read_demo(paths)
     corpus = build_rag_corpus(demo_df if rag_enabled and rag_cfg.get("use_demo_examples", True) else None)
     rows = []
@@ -233,6 +307,7 @@ def stage_extract(config_path: str | Path) -> pd.DataFrame:
         flat.update({"occurrenceID": occ, "method": "rule_ocr", "parse_failure": False})
         rows.append(flat)
         if backend != "none":
+            gate_reason = _llm_evidence_gate_reason(occ, prompt_text, image_manifest, cfg)
             retrieved = retrieve_context(prompt_text, corpus, top_k=top_k) if rag_enabled and top_k > 0 else []
             ctx = format_context_for_prompt(retrieved)
             prompt = f"Context:\n{ctx}\n\nOCR text:\n{prompt_text}" if retrieved else f"OCR text:\n{prompt_text}"
@@ -242,7 +317,8 @@ def stage_extract(config_path: str | Path) -> pd.DataFrame:
             ]
             with rag_jsonl.open("a", encoding="utf-8") as f:
                 f.write(json.dumps({"occurrenceID": occ, "method": method_name, "backend": backend, "retrieved_context": retrieved}, ensure_ascii=False) + "\n")
-            meta = call_llm_with_metadata(messages, cfg)
+            llm_call_attempted = not bool(gate_reason)
+            meta = call_llm_with_metadata(messages, cfg) if llm_call_attempted else _llm_static_metadata(cfg, backend)
             raw = clean_str(meta.get("content", ""))
             reasoning_content = clean_str(meta.get("reasoning_content", ""))
             response_body = meta.get("response", {})
@@ -270,10 +346,12 @@ def stage_extract(config_path: str | Path) -> pd.DataFrame:
                     "parsed_json": None,
                     "parse_failure": None,
                     "error_message": error_message,
+                    "llm_call_attempted": llm_call_attempted,
+                    "skip_reason": gate_reason,
                 }, ensure_ascii=False) + "\n")
             obj = _parse_llm_json(raw)
-            not_evaluated = not bool(raw)
-            not_evaluated_reason = error_message if error_message else ("empty_raw_output" if not raw else "")
+            not_evaluated = bool(gate_reason) or not bool(raw)
+            not_evaluated_reason = gate_reason or (error_message if error_message else ("empty_raw_output" if not raw else ""))
             if obj is None:
                 obj = {}
                 parse_failure = bool(raw) and not not_evaluated
@@ -320,7 +398,9 @@ def stage_extract(config_path: str | Path) -> pd.DataFrame:
                 "not_evaluated": not_evaluated,
                 "not_evaluated_reason": not_evaluated_reason if not_evaluated else "",
                 "error_message": error_message,
-                "status": "not_evaluated" if not_evaluated else ("parsed" if raw and not parse_failure else ("parse_failure" if raw else "empty_raw_output")),
+                "llm_call_attempted": llm_call_attempted,
+                "skip_reason": gate_reason,
+                "status": "skipped" if gate_reason else ("not_evaluated" if not_evaluated else ("parsed" if raw and not parse_failure else ("parse_failure" if raw else "empty_raw_output"))),
             })
     out = pd.DataFrame(rows)
     out = out.merge(eval_df[["occurrenceID", "institutionCode"]], on="occurrenceID", how="left")
@@ -339,6 +419,8 @@ def stage_extract(config_path: str | Path) -> pd.DataFrame:
             "backend": backend,
             "method": method_name,
             "records": int(len(diag_df)),
+            "llm_calls_attempted": int(diag_df["llm_call_attempted"].sum()),
+            "llm_calls_skipped": int((~diag_df["llm_call_attempted"]).sum()),
             "api_key_present": bool(diag_df["api_key_present"].any()),
             "base_url": clean_str(diag_df["base_url"].iloc[0]) if len(diag_df) else "",
             "requested_model": clean_str(diag_df["requested_model"].iloc[0]) if len(diag_df) else "",

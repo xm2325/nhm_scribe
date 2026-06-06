@@ -64,6 +64,8 @@ def read_llm_diagnostics(paths: dict[str, Path], cfg: dict[str, Any] | None = No
                 "reasoning_content_length": item.get("reasoning_content_length", 0),
                 "raw_output_length": item.get("raw_output_length", len(str(item.get("raw_output", "")))),
                 "raw_output_nonempty": bool(item.get("raw_output", "")),
+                "llm_call_attempted": _truthy(item.get("llm_call_attempted", True)),
+                "skip_reason": item.get("skip_reason", ""),
                 "rag_context_count": len(retrieved) if isinstance(retrieved, list) else 0,
                 "parse_failure": _truthy(item.get("parse_failure", False)),
                 "not_evaluated": _truthy(item.get("not_evaluated", False)),
@@ -119,6 +121,8 @@ def read_llm_diagnostics(paths: dict[str, Path], cfg: dict[str, Any] | None = No
         "endpoint_reachable": bool(detail.get("endpoint_reachable", pd.Series(dtype=str)).map(_truthy).any()) if "endpoint_reachable" in detail else False,
         "min_interval_seconds": ", ".join(sorted(set(detail.get("min_interval_seconds", pd.Series(dtype=str)).dropna().astype(str)) - {""})) if "min_interval_seconds" in detail else "",
         "records": int(len(detail)),
+        "llm_calls_attempted": int(detail.get("llm_call_attempted", pd.Series(True, index=detail.index)).map(_truthy).sum()),
+        "llm_calls_skipped": int((~detail.get("llm_call_attempted", pd.Series(True, index=detail.index)).map(_truthy)).sum()),
         "raw_output_nonempty": int(detail["raw_output_nonempty"].sum()) if "raw_output_nonempty" in detail else 0,
         "empty_raw_outputs": int((~detail["raw_output_nonempty"]).sum()) if "raw_output_nonempty" in detail else 0,
         "api_empty_responses": api_empty_responses,
@@ -327,9 +331,14 @@ def write_report(cfg: dict[str, Any], split_summary: pd.DataFrame, eval_summary:
         lines.append(f"- API key present: `{llm_summary.get('api_key_present', False)}`\n")
         lines.append(f"- Endpoint reachable: `{llm_summary.get('endpoint_reachable', False)}`\n")
         lines.append(f"- Minimum request interval seconds: `{llm_summary.get('min_interval_seconds', '')}`\n")
-        lines.append(f"- LLM records attempted: `{llm_summary.get('records', 0)}`\n")
+        lines.append(f"- LLM records considered: `{llm_summary.get('records', 0)}`\n")
+        lines.append(f"- LLM API calls attempted: `{llm_summary.get('llm_calls_attempted', llm_summary.get('records', 0))}`\n")
+        lines.append(f"- LLM API calls skipped by evidence gate: `{llm_summary.get('llm_calls_skipped', 0)}`\n")
         lines.append(f"- Non-empty raw outputs: `{llm_summary.get('raw_output_nonempty', 0)}`\n")
-        lines.append(f"- Empty raw outputs / likely API failures: `{llm_summary.get('empty_raw_outputs', 0)}`\n")
+        lines.append(
+            f"- Empty raw outputs (including evidence-gated skips): "
+            f"`{llm_summary.get('empty_raw_outputs', 0)}`\n"
+        )
         lines.append(f"- API empty responses: `{llm_summary.get('api_empty_responses', 0)}`\n")
         lines.append(f"- API empty response rate: `{llm_summary.get('api_empty_response_rate', 0)}`\n")
         lines.append(f"- Parsed records: `{llm_summary.get('parsed_records', 0)}`\n")

@@ -19,10 +19,14 @@ metadata:
 image:
   allow_download: false
   timeout_seconds: 20
+  retries: 0
+  retry_backoff_seconds: 2
+  min_bytes: 1024
 
 layout:
   strategy: auto
   fallback: full_image_or_fixture_text
+  structured_prompt_headers: false
   gpu: false
   component_confidence: 0.25
   field_confidence: 0.20
@@ -30,6 +34,13 @@ layout:
   label_field_resolution: 1280
   max_primary_labels: 2
   max_fields_per_label: 20
+  whole_sheet_tesseract_config: ""
+  primary_label_tesseract_config: "--psm 6"
+  field_tesseract_config: "--psm 7"
+  supplemental_tesseract_config: "--psm 7"
+  field_padding_fraction: 0.08
+  field_white_border_pixels: 10
+  primary_label_padding_fraction: 0.02
 
 ocr:
   backend: tesseract
@@ -42,6 +53,10 @@ llm:
   backend: none
   model: null
   temperature: 0.0
+  evidence_gate:
+    enabled: false
+    require_image: true
+    min_alphanumeric_characters: 1
 
 rag:
   top_k: 3

@@ -66,6 +66,8 @@ The optional Hespi-lite path uses Hespi's herbarium-specific sheet component and
 
 Run the manual **Hespi-lite POC** GitHub Actions workflow, or see [docs/hespi_lite_poc.md](docs/hespi_lite_poc.md). Hespi is an optional dependency because it requires Python 3.10/3.11 and a substantially larger PyTorch stack.
 
+The first POC showed that field-crop-only OCR can discard useful sheet context. The follow-up **Hespi v2 strict paired evaluation** freezes a shared SHA-256 image set, skips LLM calls without OCR evidence, and compares full-image, field-only, and hybrid OCR on the same 20 real images. See [docs/hespi_v2_paired.md](docs/hespi_v2_paired.md).
+
 ## Cloud demo artifacts
 
 GitHub Actions runs the same quick demo on an Ubuntu runner whenever `main` is pushed, on pull requests, or when the `demo artifacts` workflow is started manually. The workflow installs the package, runs `pytest`, runs:

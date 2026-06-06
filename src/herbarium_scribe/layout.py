@@ -12,9 +12,11 @@ from .metadata import clean_str
 def _detect_full_image_layout(
     records: pd.DataFrame,
     image_manifest: pd.DataFrame,
+    cfg: dict[str, Any],
     paths: dict[str, Path],
 ) -> pd.DataFrame:
     manifest = image_manifest.set_index("occurrenceID") if len(image_manifest) else pd.DataFrame()
+    structured_headers = bool(cfg.get("layout", {}).get("structured_prompt_headers", False))
     rows = []
     for _, row in records.iterrows():
         occ = clean_str(row.get("occurrenceID"))
@@ -43,6 +45,9 @@ def _detect_full_image_layout(
             "region_type": "label",
             "layout_method": method,
             "layout_confidence": "",
+            "evidence_source": "whole_sheet",
+            "prompt_header": "SOURCE=whole_sheet" if structured_headers else "",
+            "ocr_tesseract_config": clean_str(cfg.get("layout", {}).get("whole_sheet_tesseract_config", "")),
             "bbox": json.dumps(bbox),
             "image_path": image_path,
             "crop_path": crop_path,
@@ -53,12 +58,12 @@ def _detect_full_image_layout(
 
 def detect_layout(records: pd.DataFrame, image_manifest: pd.DataFrame, cfg: dict[str, Any], paths: dict[str, Path]) -> pd.DataFrame:
     strategy = clean_str(cfg.get("layout", {}).get("strategy", "auto")).lower()
-    if strategy == "hespi_lite":
+    if strategy in {"hespi_lite", "hespi_hybrid"}:
         from .hespi_layout import detect_hespi_lite_layout
 
         out = detect_hespi_lite_layout(records, image_manifest, cfg, paths)
     else:
-        out = _detect_full_image_layout(records, image_manifest, paths)
+        out = _detect_full_image_layout(records, image_manifest, cfg, paths)
     out.to_csv(paths["processed"] / "layout_boxes.csv", index=False)
     with (paths["processed"] / "layout_boxes.jsonl").open("w", encoding="utf-8") as f:
         for rec in out.to_dict(orient="records"):

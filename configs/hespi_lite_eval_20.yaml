@@ -14,6 +14,7 @@ layout:
   label_field_resolution: 1280
   max_primary_labels: 2
   max_fields_per_label: 20
+  field_tesseract_config: "--psm 6"
 ocr:
   backend: tesseract
   tesseract_config: "--psm 6"
