@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import shutil
+import time
 from pathlib import Path
 from typing import Any
 
@@ -10,6 +11,44 @@ from .logging_utils import get_logger
 from .metadata import clean_str
 
 logger = get_logger(__name__)
+
+
+def decode_barcodes(
+    image_path: str,
+    max_dimension: int = 6000,
+) -> tuple[list[dict[str, str]], str, float]:
+    started = time.monotonic()
+    if not image_path or not Path(image_path).exists():
+        return [], "missing_image", 0.0
+    try:
+        from PIL import Image
+        import zxingcpp
+    except Exception as exc:
+        return [], f"unavailable:{type(exc).__name__}", time.monotonic() - started
+    try:
+        image = Image.open(image_path).convert("RGB")
+        if max_dimension > 0 and max(image.size) > max_dimension:
+            image.thumbnail((max_dimension, max_dimension))
+        decoded = zxingcpp.read_barcodes(
+            image,
+            try_rotate=True,
+            try_downscale=True,
+            try_invert=True,
+        )
+        values = []
+        seen = set()
+        for item in decoded:
+            value = clean_str(getattr(item, "text", ""))
+            if not value or value in seen:
+                continue
+            seen.add(value)
+            values.append({
+                "value": value,
+                "format": clean_str(str(getattr(item, "format", ""))),
+            })
+        return values, "ok" if values else "no_barcode", time.monotonic() - started
+    except Exception as exc:
+        return [], f"error:{type(exc).__name__}", time.monotonic() - started
 
 
 def resolve_ocr_backend(backend: str = "tesseract") -> str:
@@ -138,7 +177,60 @@ def run_ocr(layout_df: pd.DataFrame, cfg: dict[str, Any], paths: dict[str, Path]
             "error_message": error_message,
             "used_fixture_text": used_fixture_text,
             "ocr_text_path": str(out_txt),
+            "barcode_format": "",
+            "barcode_count": "",
+            "barcode_ambiguous": "",
+            "barcode_elapsed_seconds": "",
         })
+    barcode_cfg = ocfg.get("barcode_decoder", {})
+    if bool(barcode_cfg.get("enabled", False)):
+        max_dimension = int(barcode_cfg.get("max_dimension", 6000))
+        image_rows = (
+            layout_df[["occurrenceID", "image_path"]]
+            .drop_duplicates("occurrenceID")
+            .fillna("")
+        )
+        for _, image_row in image_rows.iterrows():
+            occurrence_id = clean_str(image_row.get("occurrenceID"))
+            image_path = clean_str(image_row.get("image_path"))
+            decoded, status, elapsed = decode_barcodes(image_path, max_dimension=max_dimension)
+            values = [item["value"] for item in decoded]
+            formats = [item["format"] for item in decoded]
+            text = "\n".join(values)
+            header = (
+                "FIELD=catalog_number; SOURCE=barcode_decoder; "
+                f"decoded_values={len(values)}; ambiguous={'true' if len(values) > 1 else 'false'}"
+            )
+            prompt_text = f"[{header}]\n{text}" if text else ""
+            region_id = f"{occurrence_id}::barcode_decoder"
+            out_txt = paths["ocr"] / (
+                clean_str(region_id).replace(":", "_").replace("/", "_") + ".txt"
+            )
+            out_txt.write_text(text, encoding="utf-8")
+            rows.append({
+                "occurrenceID": occurrence_id,
+                "region_id": region_id,
+                "region_label": "barcode_decoder",
+                "region_type": "barcode_decoder",
+                "evidence_source": "barcode_decoder",
+                "prompt_header": header,
+                "tesseract_config": "",
+                "ocr_engine": "zxingcpp",
+                "ocr_status": status,
+                "ocr_confidence": 1.0 if len(values) == 1 else "",
+                "ocr_text": text,
+                "ocr_prompt_text": prompt_text,
+                "text_length": len(text),
+                "image_path": image_path,
+                "crop_path": image_path,
+                "error_message": status if status.startswith(("error:", "missing", "unavailable:")) else "",
+                "used_fixture_text": False,
+                "ocr_text_path": str(out_txt),
+                "barcode_format": ";".join(formats),
+                "barcode_count": len(values),
+                "barcode_ambiguous": len(values) > 1,
+                "barcode_elapsed_seconds": round(elapsed, 3),
+            })
     out = pd.DataFrame(rows)
     out.to_csv(paths["processed"] / "ocr_by_region.csv", index=False)
     combined = out.groupby("occurrenceID", as_index=False).agg({

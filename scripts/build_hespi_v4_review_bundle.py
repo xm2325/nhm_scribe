@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import argparse
 import shutil
 from pathlib import Path
 
@@ -9,8 +10,19 @@ from herbarium_scribe.download import safe_filename
 
 
 def main() -> None:
-    root = Path("data/experiments/hespi_v4_eval10_shared/processed")
-    output = Path("reports/hespi_v4_repeat10/review_bundle")
+    parser = argparse.ArgumentParser()
+    parser.add_argument(
+        "--processed-dir",
+        default="data/experiments/hespi_v4_eval10_shared/processed",
+    )
+    parser.add_argument(
+        "--output-dir",
+        default="reports/hespi_v4_repeat10/review_bundle",
+    )
+    args = parser.parse_args()
+
+    root = Path(args.processed_dir)
+    output = Path(args.output_dir)
     image_dir = output / "images"
     image_dir.mkdir(parents=True, exist_ok=True)
 

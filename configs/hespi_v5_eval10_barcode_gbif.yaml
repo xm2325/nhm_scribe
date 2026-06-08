@@ -1,0 +1,48 @@
+extends: configs/hespi_v4_eval10_shared_lean.yaml
+method_name: deepseek_v4_pro_nonthinking_barcode_gbif
+paths:
+  data_dir: data/experiments/hespi_v5_eval10
+  reports_dir: reports/hespi_v5_eval10
+experiment:
+  title: "Hespi v5 Eval10: Barcode + GBIF"
+ocr:
+  barcode_decoder:
+    enabled: true
+    max_dimension: 6000
+llm:
+  backend: deepseek_api
+  base_url: https://api.deepseek.com
+  model_name: deepseek-v4-pro
+  thinking: disabled
+  response_format: json_object
+  temperature: 0.0
+  max_tokens: 1500
+  timeout_seconds: 300
+  retries: 3
+  retry_backoff_seconds: 20
+  min_interval_seconds: 1.0
+  evidence_gate:
+    enabled: true
+    require_image: true
+    min_alphanumeric_characters: 10
+rag:
+  enabled: false
+  use_demo_examples: false
+  top_k: 0
+reconciliation:
+  use_gbif_api: true
+  gbif_base_url: https://api.gbif.org/v1
+  gbif_timeout_seconds: 20
+  gbif_retries: 2
+  gbif_min_confidence: 90
+  gbif_methods:
+    - deepseek_v4_pro_nonthinking_barcode_gbif
+  gbif_cache_path: data/experiments/hespi_v5_eval10/processed/gbif_match_cache.json
+outputs:
+  prefix: hespi_v5_eval10
+  prediction_name: deepseek_barcode_gbif
+  llm_artifact_family: hespi_v5_eval10
+  llm_outputs_name: hespi_v5_eval10_outputs.jsonl
+  llm_diagnostics_name: hespi_v5_eval10_diagnostics.csv
+  llm_diagnostics_json_name: hespi_v5_eval10_diagnostics.json
+  report_name: hespi_v5_eval10_report.md

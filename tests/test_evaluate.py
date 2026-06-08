@@ -111,6 +111,74 @@ def test_evidence_status_and_review_gate_distinguish_contextual_inference():
     assert "high_risk_without_direct_evidence" in reasons
 
 
+def test_catalog_with_multiple_decoded_barcodes_requires_review(tmp_path):
+    predictions = pd.DataFrame([{
+        "occurrenceID": "eval:1",
+        "method": "llm",
+        "catalogNumber": "L.2489324",
+        "catalogNumber_evidence_span": "L.2489324",
+        "catalogNumber_confidence": 0.95,
+        "parse_failure": False,
+        "not_evaluated": False,
+    }])
+    gold = pd.DataFrame([{
+        "occurrenceID": "eval:1",
+        "catalogNumber": "L.2489324",
+    }])
+    ocr = pd.DataFrame([{
+        "occurrenceID": "eval:1",
+        "ocr_engine": "zxingcpp",
+        "ocr_text": "L.2489324\nL 0398679",
+    }])
+
+    detail, _, _ = evaluate_predictions(
+        predictions,
+        gold,
+        ocr,
+        ["catalogNumber"],
+        {"processed": tmp_path},
+    )
+
+    row = detail.iloc[0]
+    assert row["review_required"] == 1
+    assert row["review_priority"] == "high"
+    assert "multiple_decoded_barcodes" in row["review_reasons"]
+    assert row["barcode_candidate_count"] == 2
+
+
+def test_catalog_mismatch_with_single_decoded_barcode_requires_review(tmp_path):
+    predictions = pd.DataFrame([{
+        "occurrenceID": "eval:1",
+        "method": "llm",
+        "catalogNumber": "E00120034",
+        "catalogNumber_evidence_span": "E00120034",
+        "catalogNumber_confidence": 0.95,
+        "parse_failure": False,
+        "not_evaluated": False,
+    }])
+    gold = pd.DataFrame([{
+        "occurrenceID": "eval:1",
+        "catalogNumber": "E00120084",
+    }])
+    ocr = pd.DataFrame([{
+        "occurrenceID": "eval:1",
+        "ocr_engine": "zxingcpp",
+        "ocr_text": "E00120084",
+    }])
+
+    detail, _, _ = evaluate_predictions(
+        predictions,
+        gold,
+        ocr,
+        ["catalogNumber"],
+        {"processed": tmp_path},
+    )
+
+    row = detail.iloc[0]
+    assert row["review_required"] == 1
+    assert "catalog_mismatch_single_decoded_barcode" in row["review_reasons"]
+
+
 def test_rag_delta_reports_no_rag_only(tmp_path):
     processed = tmp_path / "processed"
     processed.mkdir()

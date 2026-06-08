@@ -351,7 +351,11 @@ def stage_extract(config_path: str | Path) -> pd.DataFrame:
                         "Use an empty value and empty evidence_span when the OCR does not support a field. "
                         "Every non-empty field must include an evidence_span copied exactly from the supplied OCR. "
                         "Country, stateProvince, eventDate, recordedBy, and coordinates must remain empty unless "
-                        "their source text is explicit in OCR. Never repair uncertain OCR by guessing. Return JSON only."
+                        "their source text is explicit in OCR. Barcode decoder values are stronger catalogNumber "
+                        "evidence than numeric job, collection, or image-processing numbers. When several decoded "
+                        "barcodes disagree, use surrounding OCR and institutional identifier structure; leave "
+                        "catalogNumber empty if the specimen-level identifier remains ambiguous. Never repair "
+                        "uncertain OCR by guessing. Return JSON only."
                     ),
                 },
                 {"role": "user", "content": prompt},
@@ -507,7 +511,7 @@ def stage_reconcile(config_path: str | Path) -> pd.DataFrame:
     cfg, paths = load_runtime(config_path)
     p = paths["processed"] / "extractions_flat.csv"
     pred = pd.read_csv(p, dtype=str).fillna("") if p.exists() else stage_extract(config_path)
-    return reconcile_dataframe(pred, paths)
+    return reconcile_dataframe(pred, paths, cfg)
 
 
 def stage_evaluate(config_path: str | Path) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:

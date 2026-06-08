@@ -275,6 +275,17 @@ def evaluate_predictions(
 ) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
     gold = gold_df.set_index("occurrenceID")
     ocr_text = ocr_df.groupby("occurrenceID")["ocr_text"].apply("\n".join).to_dict() if len(ocr_df) else {}
+    barcode_candidates: dict[str, list[str]] = {}
+    if len(ocr_df) and "ocr_engine" in ocr_df.columns:
+        barcode_rows = ocr_df[ocr_df["ocr_engine"].astype(str).eq("zxingcpp")]
+        for occurrence_id, group in barcode_rows.groupby("occurrenceID"):
+            values = []
+            for text in group["ocr_text"].astype(str):
+                for value in text.splitlines():
+                    value = clean_str(value)
+                    if value and value not in values:
+                        values.append(value)
+            barcode_candidates[str(occurrence_id)] = values
     proxy_rows = []
     for occ, grow in gold.iterrows():
         vals = []
@@ -324,6 +335,33 @@ def evaluate_predictions(
                 validation_warning=validation_warning,
                 review_config=review_config,
             )
+            record_barcode_candidates = barcode_candidates.get(str(occ), [])
+            if predicted and field == "catalogNumber" and record_barcode_candidates:
+                normalised_prediction = normalize_field_value(field, pred_val)
+                normalised_candidates = {
+                    normalize_field_value(field, value)
+                    for value in record_barcode_candidates
+                }
+                barcode_reasons = []
+                if len(record_barcode_candidates) > 1:
+                    barcode_reasons.append("multiple_decoded_barcodes")
+                if (
+                    len(record_barcode_candidates) == 1
+                    and normalised_prediction not in normalised_candidates
+                ):
+                    barcode_reasons.append("catalog_mismatch_single_decoded_barcode")
+                if barcode_reasons:
+                    review_required = True
+                    review_priority = "high"
+                    review_reasons = ";".join(
+                        dict.fromkeys(
+                            [
+                                value
+                                for value in [review_reasons, *barcode_reasons]
+                                if value
+                            ]
+                        )
+                    )
             rows.append({
                 "occurrenceID": occ,
                 "method": prow.get("method", "unknown"),
@@ -345,6 +383,8 @@ def evaluate_predictions(
                 "direct_evidence_supported": direct_evidence_supported,
                 "unsupported_prediction": (1 - direct_evidence_supported) if predicted else np.nan,
                 "prediction_confidence": confidence,
+                "barcode_candidates": " | ".join(record_barcode_candidates) if field == "catalogNumber" else "",
+                "barcode_candidate_count": len(record_barcode_candidates) if field == "catalogNumber" else np.nan,
                 "review_required": int(review_required) if predicted else np.nan,
                 "review_priority": review_priority,
                 "review_reasons": review_reasons,
