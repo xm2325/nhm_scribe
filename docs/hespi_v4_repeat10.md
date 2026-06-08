@@ -20,7 +20,12 @@ Predicted fields receive one evidence status:
 - `unsupported`: no adequate OCR support;
 - `not_predicted`: the field is empty.
 
-Only unanimous predictions with direct evidence in all three repeats and confidence of at least 0.75 are eligible for automatic acceptance. High-risk fields use a 0.90 confidence review threshold.
+Only unanimous predictions with direct evidence in all three repeats and confidence of at least 0.75 are candidates for automatic acceptance. The current conservative policy auto-accepts only:
+
+- recognised `typeStatus` values;
+- alphanumeric `catalogNumber` values also found in a targeted OCR region, not only whole-sheet OCR.
+
+Other populated fields remain in human review until field-specific validation is added. Scaling also requires minimum consensus accuracy and auto-accept precision; stable output alone is not sufficient.
 
 ## Run
 
