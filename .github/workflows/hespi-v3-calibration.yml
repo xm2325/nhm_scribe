@@ -1,6 +1,11 @@
 name: Hespi v3 five-record calibration
 
 on:
+  push:
+    branches:
+      - main
+    paths:
+      - .github/run-hespi-v3-nonthinking.trigger
   workflow_dispatch:
     inputs:
       run_mode:
@@ -19,6 +24,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 240
     env:
+      RUN_MODE: ${{ inputs.run_mode || 'nonthinking_hybrid' }}
       DEEPSEEK_API_KEY: ${{ secrets.DEEPSEEK_API_KEY_SELF }}
       DEEPSEEK_BASE_URL: https://api.deepseek.com
       DEEPSEEK_MODEL: deepseek-v4-pro
@@ -68,15 +74,15 @@ jobs:
           python scripts/prepare_hespi_v2_paired_eval.py 2>&1 | tee reports/hespi_v3_calibration/acquisition.log
 
       - name: Run thinking hybrid
-        if: inputs.run_mode == 'thinking_hybrid' || inputs.run_mode == 'comparison'
+        if: env.RUN_MODE == 'thinking_hybrid' || env.RUN_MODE == 'comparison'
         run: python scripts/run_pipeline.py --config configs/hespi_v3_eval5_thinking_hybrid.yaml
 
       - name: Run non-thinking hybrid
-        if: inputs.run_mode == 'nonthinking_hybrid' || inputs.run_mode == 'comparison'
+        if: env.RUN_MODE == 'nonthinking_hybrid' || env.RUN_MODE == 'comparison'
         run: python scripts/run_pipeline.py --config configs/hespi_v3_eval5_nonthinking_hybrid.yaml
 
       - name: Run non-thinking lean hybrid
-        if: inputs.run_mode == 'nonthinking_lean' || inputs.run_mode == 'comparison'
+        if: env.RUN_MODE == 'nonthinking_lean' || env.RUN_MODE == 'comparison'
         run: python scripts/run_pipeline.py --config configs/hespi_v3_eval5_nonthinking_lean.yaml
 
       - name: Build calibration report
@@ -127,7 +133,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v7
         with:
-          name: herbarium-scribe-hespi-v3-calibration-${{ inputs.run_mode }}-${{ github.run_id }}
+          name: herbarium-scribe-hespi-v3-calibration-${{ env.RUN_MODE }}-${{ github.run_id }}
           retention-days: 30
           if-no-files-found: warn
           path: |

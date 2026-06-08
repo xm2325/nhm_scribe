@@ -26,7 +26,15 @@ Open **Actions -> Hespi v3 five-record calibration -> Run workflow** and select 
 - `nonthinking_lean`: whole sheet, primary label, and selected number/stamp components, without small label-field crops;
 - `comparison`: runs all three variants, for fifteen DeepSeek calls.
 
-The workflow is manual only. Pushing a commit does not start it.
+Ordinary code pushes do not start the calibration workflow.
+
+Maintainers can also start only the recommended `nonthinking_hybrid` smoke by updating:
+
+```text
+.github/run-hespi-v3-nonthinking.trigger
+```
+
+Other pushes do not start the calibration workflow.
 
 ## Decision rules
 
