@@ -36,6 +36,14 @@ Maintainers can also start only the recommended `nonthinking_hybrid` smoke by up
 
 Other pushes do not start the calibration workflow.
 
+The complete three-way comparison can be started by updating:
+
+```text
+.github/run-hespi-v3-comparison.trigger
+```
+
+and using `[run-hespi-v3-comparison]` in that commit message.
+
 ## Decision rules
 
 Prefer non-thinking mode when:
