@@ -1,0 +1,18 @@
+extends: configs/hespi_v3_eval5_base.yaml
+method_name: deepseek_v4_pro_thinking
+paths:
+  data_dir: data/experiments/hespi_v3_thinking_hybrid
+experiment:
+  title: "Hespi v3 Calibration A: Thinking Hybrid"
+llm:
+  thinking: enabled
+  response_format: json_object
+  max_tokens: 12000
+outputs:
+  prefix: hespi_v3_thinking_hybrid
+  prediction_name: deepseek_thinking
+  llm_artifact_family: hespi_v3_thinking_hybrid
+  llm_outputs_name: hespi_v3_thinking_hybrid_outputs.jsonl
+  llm_diagnostics_name: hespi_v3_thinking_hybrid_diagnostics.csv
+  llm_diagnostics_json_name: hespi_v3_thinking_hybrid_diagnostics.json
+  report_name: hespi_v3_thinking_hybrid_report.md

@@ -166,3 +166,46 @@ def test_hespi_hybrid_keeps_whole_sheet_primary_and_fields(tmp_path, monkeypatch
     primary = out[out["evidence_source"] == "primary_label"].iloc[0]
     assert whole["ocr_tesseract_config"] == "--psm 11"
     assert primary["ocr_tesseract_config"] == "--psm 6"
+
+
+def test_hespi_lean_hybrid_omits_label_field_crops(tmp_path, monkeypatch):
+    image_path = tmp_path / "sheet.jpg"
+    Image.new("RGB", (200, 100), "white").save(image_path)
+    paths = {
+        "interim": tmp_path / "interim",
+        "crops": tmp_path / "interim" / "crops",
+        "processed": tmp_path / "processed",
+    }
+    for path in paths.values():
+        path.mkdir(parents=True, exist_ok=True)
+    records = pd.DataFrame([{
+        "occurrenceID": "urn:test:lean",
+        "catalogNumber": "LEAN1",
+        "fixture_label_text": "",
+    }])
+    manifest = pd.DataFrame([{
+        "occurrenceID": "urn:test:lean",
+        "image_path": str(image_path),
+    }])
+    monkeypatch.setattr(
+        "herbarium_scribe.hespi_layout._create_hespi",
+        lambda _cfg: FakeHespi(),
+    )
+
+    out = detect_hespi_lite_layout(
+        records,
+        manifest,
+        {
+            "layout": {
+                "strategy": "hespi_hybrid",
+                "include_label_fields": False,
+            },
+            "outputs": {"prefix": "lean"},
+        },
+        paths,
+    )
+
+    assert set(out["evidence_source"]) == {"whole_sheet", "primary_label"}
+    diagnostics = pd.read_csv(paths["processed"] / "lean_hespi_layout_diagnostics.csv")
+    assert diagnostics.loc[0, "label_field_count"] == 0
+    assert pd.isna(diagnostics.loc[0, "fallback_reason"])

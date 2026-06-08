@@ -1,0 +1,18 @@
+extends: configs/hespi_v3_eval5_nonthinking_hybrid.yaml
+paths:
+  data_dir: data/experiments/hespi_v3_nonthinking_lean
+experiment:
+  title: "Hespi v3 Calibration C: Non-Thinking Lean Hybrid"
+layout:
+  include_whole_sheet: true
+  include_primary_labels: true
+  include_supplemental_components: true
+  include_label_fields: false
+outputs:
+  prefix: hespi_v3_nonthinking_lean
+  prediction_name: deepseek_nonthinking
+  llm_artifact_family: hespi_v3_nonthinking_lean
+  llm_outputs_name: hespi_v3_nonthinking_lean_outputs.jsonl
+  llm_diagnostics_name: hespi_v3_nonthinking_lean_diagnostics.csv
+  llm_diagnostics_json_name: hespi_v3_nonthinking_lean_diagnostics.json
+  report_name: hespi_v3_nonthinking_lean_report.md

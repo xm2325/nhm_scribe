@@ -148,9 +148,15 @@ The default uses local string rules and cached tables when present. It does not 
 
 ## Evaluation metrics
 
-The evaluation module reports field-level exact match, token F1, prediction coverage, parse failure rate when an LLM is used, validation warning rate, OCR evidence proxy score, and stratified summaries by OCR quality tertile.
+The evaluation module reports field-level exact match, token F1, prediction coverage, parse failure rate when an LLM is used, validation warning rate, OCR evidence proxy score, and stratified summaries by OCR quality tertile. Catalogue numbers, common date formats, collector names, coordinates, and type-status values use field-specific normalization. LLM predictions retain `evidence_span`, allowing the report to measure direct OCR support and unsupported-prediction rate.
 
 The OCR evidence proxy is not character error rate (CER) or word error rate (WER). Catalogue metadata is not a full label transcription, so this proxy only measures whether catalogue field values appear in OCR text after normalisation.
+
+## Hespi v3 calibration
+
+The manual **Hespi v3 five-record calibration** workflow tests DeepSeek thinking versus non-thinking JSON mode and compares the current hybrid OCR prompt with a lean hybrid that omits small label-field crops. Choose one smoke test from the workflow input; only the `comparison` option runs all three variants.
+
+See [`docs/hespi_v3_calibration.md`](docs/hespi_v3_calibration.md) for decision thresholds and artifact paths.
 
 ## Main limitations
 

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import re
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 
@@ -15,6 +16,117 @@ def normalize_eval(x: str) -> str:
     x = re.sub(r"[^\w\s.\-]", "", x)
     x = re.sub(r"\s+", " ", x).strip()
     return x
+
+
+def _normalise_catalog_number(value: str) -> str:
+    return re.sub(r"[^A-Za-z0-9]+", "", clean_str(value)).upper()
+
+
+def _parse_date_part(value: str) -> str:
+    value = clean_str(value)
+    value = re.sub(r"(?<=\d)(st|nd|rd|th)\b", "", value, flags=re.IGNORECASE)
+    value = re.sub(r"\s+", " ", value).strip(" .")
+    for fmt in (
+        "%Y-%m-%d",
+        "%Y/%m/%d",
+        "%d.%m.%Y",
+        "%d/%m/%Y",
+        "%d-%m-%Y",
+        "%d %b %Y",
+        "%d %B %Y",
+        "%b %d %Y",
+        "%B %d %Y",
+    ):
+        try:
+            return datetime.strptime(value, fmt).date().isoformat()
+        except ValueError:
+            pass
+    if re.fullmatch(r"\d{4}-\d{2}", value):
+        return value
+    if re.fullmatch(r"\d{4}", value):
+        return value
+    return normalize_eval(value)
+
+
+def _normalise_event_date(value: str) -> str:
+    value = clean_str(value)
+    if not value:
+        return ""
+    parts = [value]
+    slash_parts = [part.strip() for part in value.split("/")]
+    if len(slash_parts) == 2 and all(re.search(r"\b\d{4}\b", part) for part in slash_parts):
+        parts = slash_parts
+    return "/".join(_parse_date_part(part) for part in parts)
+
+
+def _normalise_person_name(value: str) -> str:
+    tokens = re.findall(r"[A-Za-zÀ-ÖØ-öø-ÿ0-9]+", clean_str(value).lower())
+    return " ".join(sorted(tokens))
+
+
+def _normalise_type_status(value: str) -> str:
+    text = normalize_eval(value)
+    for status in (
+        "holotype",
+        "isotype",
+        "lectotype",
+        "isolectotype",
+        "neotype",
+        "isoneotype",
+        "syntype",
+        "isosyntype",
+        "paratype",
+        "isoparatype",
+        "type",
+    ):
+        if re.search(rf"\b{status}\b", text):
+            return status
+    return text
+
+
+def normalize_field_value(field: str, value: str) -> str:
+    if field == "catalogNumber":
+        return _normalise_catalog_number(value)
+    if field == "eventDate":
+        return _normalise_event_date(value)
+    if field == "recordedBy":
+        return _normalise_person_name(value)
+    if field == "typeStatus":
+        return _normalise_type_status(value)
+    if field in {"decimalLatitude", "decimalLongitude"}:
+        try:
+            return f"{float(clean_str(value)):.8f}".rstrip("0").rstrip(".")
+        except (TypeError, ValueError):
+            return normalize_eval(value)
+    return normalize_eval(value)
+
+
+def field_exact_match(field: str, pred: str, gold: str, coordinate_tolerance: float = 1e-4) -> int:
+    if field in {"decimalLatitude", "decimalLongitude"}:
+        try:
+            return int(abs(float(clean_str(pred)) - float(clean_str(gold))) <= coordinate_tolerance)
+        except (TypeError, ValueError):
+            pass
+    return int(normalize_field_value(field, pred) == normalize_field_value(field, gold))
+
+
+def field_token_f1(field: str, pred: str, gold: str, coordinate_tolerance: float = 1e-4) -> float:
+    if field in {"catalogNumber", "decimalLatitude", "decimalLongitude", "typeStatus"}:
+        return float(field_exact_match(field, pred, gold, coordinate_tolerance))
+    p = normalize_field_value(field, pred).replace("/", " ").split()
+    g = normalize_field_value(field, gold).replace("/", " ").split()
+    if not p and not g:
+        return 1.0
+    if not p or not g:
+        return 0.0
+    p_counts = {t: p.count(t) for t in set(p)}
+    g_counts = {t: g.count(t) for t in set(g)}
+    common = sum(min(p_counts.get(t, 0), g_counts.get(t, 0)) for t in p_counts)
+    if common == 0:
+        return 0.0
+    precision = common / len(p)
+    recall = common / len(g)
+    return 2 * precision * recall / (precision + recall)
 
 
 def exact_match(pred: str, gold: str) -> int:
@@ -113,17 +225,39 @@ def evaluate_predictions(pred_df: pd.DataFrame, gold_df: pd.DataFrame, ocr_df: p
         for field in fields:
             pred_val = clean_str(prow.get(field, ""))
             gold_val = clean_str(gold.loc[occ].get(field, ""))
+            evidence_span = clean_str(prow.get(f"{field}_evidence_span", ""))
+            evidence_support_score = evidence_proxy(evidence_span, ocr_text.get(occ, "")) if evidence_span else None
+            prediction_evidence_alignment = (
+                field_token_f1(field, pred_val, evidence_span)
+                if pred_val and evidence_span
+                else None
+            )
             evaluable = bool(gold_val) and not not_evaluated
+            predicted = bool(pred_val) and not not_evaluated
+            direct_evidence_supported = (
+                int(evidence_support_score >= 1.0 and prediction_evidence_alignment >= 0.5)
+                if predicted and evidence_support_score is not None and prediction_evidence_alignment is not None
+                else (0 if predicted else np.nan)
+            )
             rows.append({
                 "occurrenceID": occ,
                 "method": prow.get("method", "unknown"),
                 "field": field,
                 "prediction": pred_val,
                 "gold": gold_val,
+                "normalised_prediction": normalize_field_value(field, pred_val),
+                "normalised_gold": normalize_field_value(field, gold_val),
                 "evaluable": int(evaluable),
                 "coverage": int(bool(pred_val)) if evaluable else np.nan,
-                "exact_match": exact_match(pred_val, gold_val) if evaluable else np.nan,
-                "token_f1": token_f1(pred_val, gold_val) if evaluable else np.nan,
+                "exact_match": field_exact_match(field, pred_val, gold_val) if evaluable else np.nan,
+                "token_f1": field_token_f1(field, pred_val, gold_val) if evaluable else np.nan,
+                "evidence_span": evidence_span,
+                "evidence_span_present": int(bool(evidence_span)) if predicted else np.nan,
+                "evidence_span_ocr_support_score": evidence_support_score if predicted else np.nan,
+                "prediction_evidence_alignment_score": prediction_evidence_alignment if predicted else np.nan,
+                "direct_evidence_supported": direct_evidence_supported,
+                "unsupported_prediction": (1 - direct_evidence_supported) if predicted else np.nan,
+                "prediction_confidence": pd.to_numeric(prow.get(f"{field}_confidence", np.nan), errors="coerce"),
                 "validation_warning": int(bool(clean_str(prow.get("validation_warnings", "")))),
                 "parse_failure": int(truthy_flag(prow.get("parse_failure", False))),
                 "not_evaluated": int(not_evaluated),
@@ -139,6 +273,9 @@ def evaluate_predictions(pred_df: pd.DataFrame, gold_df: pd.DataFrame, ocr_df: p
             validation_warning_rate=("validation_warning", "mean"),
             parse_failure_rate=("parse_failure", "mean"),
             not_evaluated_rate=("not_evaluated", "mean"),
+            evidence_span_present_rate=("evidence_span_present", "mean"),
+            direct_evidence_support_rate=("direct_evidence_supported", "mean"),
+            unsupported_prediction_rate=("unsupported_prediction", "mean"),
             n=("evaluable", "sum"),
         )
         strat = detail.groupby(["method", "ocr_quality_tertile", "field"], as_index=False).agg(

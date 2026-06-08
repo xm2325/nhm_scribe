@@ -164,6 +164,13 @@ def _method_comparison(eval_summary: pd.DataFrame) -> pd.DataFrame:
     }
     if "not_evaluated_rate" in eval_summary.columns:
         agg["not_evaluated_rate"] = ("not_evaluated_rate", "mean")
+    for column in [
+        "evidence_span_present_rate",
+        "direct_evidence_support_rate",
+        "unsupported_prediction_rate",
+    ]:
+        if column in eval_summary.columns:
+            agg[column] = (column, "mean")
     return eval_summary.groupby("method", as_index=False).agg(**agg)
 
 
@@ -252,6 +259,8 @@ def write_report(cfg: dict[str, Any], split_summary: pd.DataFrame, eval_summary:
     lines.append(f"- LLM backend: `{cfg.get('llm', {}).get('backend', 'none')}`\n")
     if cfg.get("llm", {}).get("backend", "none") != "none":
         lines.append(f"- LLM max tokens: `{cfg.get('llm', {}).get('max_tokens', '')}`\n")
+        lines.append(f"- LLM thinking: `{cfg.get('llm', {}).get('thinking', 'provider_default')}`\n")
+        lines.append(f"- LLM response format: `{cfg.get('llm', {}).get('response_format', 'provider_default')}`\n")
     lines.append(f"- Random seed: `{cfg.get('project', {}).get('random_state', 42)}`\n")
     lines.append(f"- Experiment mode: `{mode}`\n")
     lines.append(f"- Dataset source: `{dataset_source}`\n")

@@ -1,0 +1,18 @@
+extends: configs/hespi_v3_eval5_base.yaml
+method_name: deepseek_v4_pro_nonthinking
+paths:
+  data_dir: data/experiments/hespi_v3_nonthinking_hybrid
+experiment:
+  title: "Hespi v3 Calibration B: Non-Thinking Hybrid"
+llm:
+  thinking: disabled
+  response_format: json_object
+  max_tokens: 1500
+outputs:
+  prefix: hespi_v3_nonthinking_hybrid
+  prediction_name: deepseek_nonthinking
+  llm_artifact_family: hespi_v3_nonthinking_hybrid
+  llm_outputs_name: hespi_v3_nonthinking_hybrid_outputs.jsonl
+  llm_diagnostics_name: hespi_v3_nonthinking_hybrid_diagnostics.csv
+  llm_diagnostics_json_name: hespi_v3_nonthinking_hybrid_diagnostics.json
+  report_name: hespi_v3_nonthinking_hybrid_report.md

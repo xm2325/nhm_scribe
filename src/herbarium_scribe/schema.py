@@ -61,5 +61,6 @@ def flatten_record(record: dict[str, Any]) -> dict[str, Any]:
     for field in EXTRACTION_FIELDS:
         row[field] = record.get(field, {}).get("value", "") if isinstance(record.get(field), dict) else ""
         row[f"{field}_confidence"] = record.get(field, {}).get("confidence", 0.0) if isinstance(record.get(field), dict) else 0.0
+        row[f"{field}_evidence_span"] = record.get(field, {}).get("evidence_span", "") if isinstance(record.get(field), dict) else ""
     row["validation_warnings"] = ";".join(record.get("warnings", []))
     return row

@@ -34,6 +34,10 @@ layout:
   label_field_resolution: 1280
   max_primary_labels: 2
   max_fields_per_label: 20
+  include_whole_sheet: true
+  include_primary_labels: true
+  include_label_fields: true
+  include_supplemental_components: true
   whole_sheet_tesseract_config: ""
   primary_label_tesseract_config: "--psm 6"
   field_tesseract_config: "--psm 7"

@@ -1,4 +1,5 @@
 import urllib.error
+import json
 
 from herbarium_scribe.llm_backends import call_llm, call_llm_with_metadata, _chat_completions_request, _provider_http_error
 
@@ -106,3 +107,60 @@ def test_chat_completions_retries_429_with_retry_after(monkeypatch):
     assert len(calls) == 2
     assert sleeps == [3.0]
     assert result["content"] == "{}"
+
+
+def test_chat_completions_sends_deepseek_thinking_and_json_mode(monkeypatch):
+    payloads = []
+
+    class Response:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return None
+
+        def read(self):
+            return b'{"model":"deepseek-v4-pro","choices":[{"message":{"content":"{}"}}]}'
+
+    def fake_urlopen(req, timeout):
+        payloads.append(json.loads(req.data.decode("utf-8")))
+        return Response()
+
+    monkeypatch.setattr("urllib.request.urlopen", fake_urlopen)
+    result = _chat_completions_request(
+        base_url="https://api.deepseek.com",
+        api_key="test-key",
+        model="deepseek-v4-pro",
+        messages=[{"role": "user", "content": "return json"}],
+        thinking={"type": "disabled"},
+        response_format={"type": "json_object"},
+    )
+
+    assert payloads[0]["thinking"] == {"type": "disabled"}
+    assert payloads[0]["response_format"] == {"type": "json_object"}
+    assert result["thinking"] == {"type": "disabled"}
+
+
+def test_deepseek_config_normalizes_thinking_and_response_format(monkeypatch):
+    captured = {}
+
+    def fake_request(**kwargs):
+        captured.update(kwargs)
+        return {"content": "{}", "actual_model": kwargs["model"], "error_message": "", "response": {}}
+
+    monkeypatch.setenv("DEEPSEEK_API_KEY_SELF", "test-key")
+    monkeypatch.delenv("DEEPSEEK_API_KEY", raising=False)
+    monkeypatch.setattr("herbarium_scribe.llm_backends._chat_completions_request", fake_request)
+    cfg = {
+        "llm": {
+            "backend": "deepseek_api",
+            "model_name": "deepseek-v4-pro",
+            "thinking": "disabled",
+            "response_format": "json_object",
+        }
+    }
+    out = call_llm_with_metadata([{"role": "user", "content": "json"}], cfg)
+
+    assert captured["thinking"] == {"type": "disabled"}
+    assert captured["response_format"] == {"type": "json_object"}
+    assert out["thinking"] == {"type": "disabled"}

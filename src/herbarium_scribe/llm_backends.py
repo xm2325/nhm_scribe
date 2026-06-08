@@ -58,6 +58,8 @@ def _chat_completions_request(
     timeout_seconds: int = 60,
     retries: int = 0,
     retry_backoff_seconds: float = 2.0,
+    thinking: dict[str, Any] | None = None,
+    response_format: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     url = base_url.rstrip("/") + "/chat/completions"
     payload = {
@@ -66,6 +68,10 @@ def _chat_completions_request(
         "temperature": temperature,
         "max_tokens": max_tokens,
     }
+    if thinking:
+        payload["thinking"] = thinking
+    if response_format:
+        payload["response_format"] = response_format
     req = urllib.request.Request(
         url,
         data=json.dumps(payload).encode("utf-8"),
@@ -92,6 +98,8 @@ def _chat_completions_request(
                 "message_keys": sorted(str(key) for key in message.keys()),
                 "reasoning_content": message.get("reasoning_content", "") or "",
                 "usage": body.get("usage", {}),
+                "thinking": thinking or {},
+                "response_format": response_format or {},
                 "error_message": "",
                 "response": body,
             }
@@ -111,6 +119,28 @@ def _chat_completions_request(
     return {"content": "", "actual_model": "", "error_message": "empty_response", "response": {}}
 
 
+def _thinking_config(value: Any) -> dict[str, Any] | None:
+    if isinstance(value, dict):
+        return value
+    if isinstance(value, bool):
+        return {"type": "enabled" if value else "disabled"}
+    text = str(value or "").strip().lower()
+    if text in {"enabled", "enable", "on", "true", "1"}:
+        return {"type": "enabled"}
+    if text in {"disabled", "disable", "off", "false", "0"}:
+        return {"type": "disabled"}
+    return None
+
+
+def _response_format_config(value: Any) -> dict[str, Any] | None:
+    if isinstance(value, dict):
+        return value
+    text = str(value or "").strip().lower()
+    if text in {"json", "json_object"}:
+        return {"type": "json_object"}
+    return None
+
+
 def call_llm_with_metadata(messages: list[dict[str, str]], config: dict[str, Any]) -> dict[str, Any]:
     backend = (config.get("llm", {}).get("backend", "none") or "none").lower()
     lcfg = config.get("llm", {})
@@ -124,6 +154,8 @@ def call_llm_with_metadata(messages: list[dict[str, str]], config: dict[str, Any
         "api_key_present": False,
         "base_url": "",
         "min_interval_seconds": 0.0,
+        "thinking": _thinking_config(lcfg.get("thinking")) or {},
+        "response_format": _response_format_config(lcfg.get("response_format")) or {},
     }
     if backend == "none":
         return base
@@ -150,6 +182,8 @@ def call_llm_with_metadata(messages: list[dict[str, str]], config: dict[str, Any
                 timeout_seconds=int(lcfg.get("timeout_seconds", 120)),
                 retries=int(lcfg.get("retries", 0)),
                 retry_backoff_seconds=float(lcfg.get("retry_backoff_seconds", 2.0)),
+                thinking=_thinking_config(lcfg.get("thinking")),
+                response_format=_response_format_config(lcfg.get("response_format")),
             )
             base.update(result)
             base["endpoint_reachable"] = True

@@ -55,6 +55,20 @@ def usage_value(row: dict[str, Any], key: str) -> int:
         return 0
 
 
+def reasoning_tokens(row: dict[str, Any]) -> int:
+    usage = row.get("response_usage", {})
+    if isinstance(usage, str):
+        try:
+            usage = json.loads(usage)
+        except Exception:
+            usage = {}
+    details = usage.get("completion_tokens_details", {}) if isinstance(usage, dict) else {}
+    try:
+        return int(details.get("reasoning_tokens", 0) or 0) if isinstance(details, dict) else 0
+    except (TypeError, ValueError):
+        return 0
+
+
 def paired_ids(pipelines: dict[str, dict[str, Any]], shared_dir: Path) -> tuple[set[str], pd.DataFrame]:
     shared = read_csv(shared_dir / "paired_eval_manifest.csv")
     eligible = shared[
@@ -90,6 +104,9 @@ def performance_metrics(detail: pd.DataFrame, ids: set[str], pipeline: str) -> t
     llm["exact_value"] = pd.to_numeric(llm["exact_match"], errors="coerce").fillna(0)
     llm["token_f1_value"] = pd.to_numeric(llm["token_f1"], errors="coerce").fillna(0)
     llm["parse_failure_value"] = pd.to_numeric(llm["parse_failure"], errors="coerce").fillna(0)
+    for column in ["direct_evidence_supported", "unsupported_prediction"]:
+        if column in llm.columns:
+            llm[f"{column}_value"] = pd.to_numeric(llm[column], errors="coerce")
     field = llm.groupby("field", as_index=False).agg(
         evaluable_fields=("gold", "count"),
         coverage=("filled", "mean"),
@@ -111,6 +128,8 @@ def performance_metrics(detail: pd.DataFrame, ids: set[str], pipeline: str) -> t
         "field_micro_token_f1": llm["token_f1_value"].mean(),
         "exact_match_among_filled": filled["exact_value"].mean() if len(filled) else float("nan"),
         "token_f1_among_filled": filled["token_f1_value"].mean() if len(filled) else float("nan"),
+        "direct_evidence_support_rate": filled["direct_evidence_supported_value"].mean() if len(filled) and "direct_evidence_supported_value" in filled else float("nan"),
+        "unsupported_prediction_rate": filled["unsupported_prediction_value"].mean() if len(filled) and "unsupported_prediction_value" in filled else float("nan"),
         "parse_failure_rate": record_failures["parse_failure_value"].mean(),
     }
     return metrics, field
@@ -141,6 +160,8 @@ def evidence_and_cost(spec: dict[str, Any], ids: set[str], pipeline: str) -> tup
         if bool(row.get("raw_output")) and row.get("parse_failure") is False and not bool(row.get("not_evaluated"))
     ]
     total_tokens = sum(usage_value(row, "total_tokens") for row in attempted)
+    completion_tokens = sum(usage_value(row, "completion_tokens") for row in attempted)
+    thought_tokens = sum(reasoning_tokens(row) for row in attempted)
     channel = ocr.groupby("evidence_source", as_index=False).agg(
         regions=("region_id", "count"),
         records=("occurrenceID", "nunique"),
@@ -158,7 +179,9 @@ def evidence_and_cost(spec: dict[str, Any], ids: set[str], pipeline: str) -> tup
         "empty_ocr_llm_calls": sum(row.get("occurrenceID") in empty_ids for row in attempted),
         "parsed_records": len(parsed),
         "prompt_tokens": sum(usage_value(row, "prompt_tokens") for row in attempted),
-        "completion_tokens": sum(usage_value(row, "completion_tokens") for row in attempted),
+        "completion_tokens": completion_tokens,
+        "reasoning_tokens": thought_tokens,
+        "visible_output_tokens": max(0, completion_tokens - thought_tokens),
         "total_tokens": total_tokens,
         "tokens_per_parsed_record": total_tokens / len(parsed) if parsed else float("nan"),
     }, channel
@@ -303,6 +326,7 @@ def main() -> None:
         "\n## Guardrails\n",
         "- Macro metrics weight fields equally; micro metrics weight evaluable field units equally.\n",
         "- Filled-field metrics measure correctness only where the pipeline returned a value.\n",
+        "- Unsupported prediction rate checks direct OCR support for the returned evidence span; it is not semantic entailment.\n",
         "- The OCR evidence proxy is not CER or WER.\n",
         "- No claim that Hespi improves extraction should be made unless the strict paired hybrid metrics support it.\n",
     ]

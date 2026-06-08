@@ -190,6 +190,10 @@ def detect_hespi_lite_layout(
     field_confidence = float(layout_cfg.get("field_confidence", 0.20))
     strategy = clean_str(layout_cfg.get("strategy", "hespi_lite")).lower()
     hybrid = strategy == "hespi_hybrid"
+    include_whole_sheet = hybrid and bool(layout_cfg.get("include_whole_sheet", True))
+    include_primary_labels = hybrid and bool(layout_cfg.get("include_primary_labels", True))
+    include_label_fields = bool(layout_cfg.get("include_label_fields", True))
+    include_supplemental_components = hybrid and bool(layout_cfg.get("include_supplemental_components", True))
     max_primary_labels = int(layout_cfg.get("max_primary_labels", 2))
     max_fields = int(layout_cfg.get("max_fields_per_label", 20))
     field_padding = float(layout_cfg.get("field_padding_fraction", 0.08))
@@ -283,7 +287,7 @@ def detect_hespi_lite_layout(
         else:
             try:
                 source_image = Image.open(image_path).convert("RGB")
-                if hybrid:
+                if include_whole_sheet:
                     selected_rows.append({
                         "occurrenceID": occurrence_id,
                         "region_id": f"{occurrence_id}::whole_sheet",
@@ -333,7 +337,7 @@ def detect_hespi_lite_layout(
                         "selected_for_field_detection": is_primary,
                         "annotation_path": sheet_annotation,
                     })
-                    if hybrid and label in supplemental_headers:
+                    if include_supplemental_components and label in supplemental_headers:
                         selected_rows.append({
                             "occurrenceID": occurrence_id,
                             "region_id": f"{occurrence_id}::component_{index}_{label}",
@@ -360,7 +364,7 @@ def detect_hespi_lite_layout(
                 for primary_index, primary_item in enumerate(primary):
                     primary_path = Path(primary_item["crop_path"])
                     primary_image = Image.open(primary_path).convert("RGB")
-                    if hybrid:
+                    if include_primary_labels:
                         selected_rows.append({
                             "occurrenceID": occurrence_id,
                             "region_id": f"{occurrence_id}::primary_label_{primary_index}",
@@ -376,18 +380,22 @@ def detect_hespi_lite_layout(
                             "crop_path": str(primary_path),
                             "fixture_label_text": clean_str(record.get("fixture_label_text", "")),
                         })
-                    fields, field_result = _predict(
-                        field_model,
-                        primary_path,
-                        field_resolution,
-                        field_confidence,
-                    )
-                    annotation_path = _save_annotation(
-                        field_result,
-                        record_dir / f"label_{primary_index:02d}_fields_annotated.jpg",
-                    )
-                    if annotation_path:
-                        field_annotations.append(annotation_path)
+                    if include_label_fields:
+                        fields, field_result = _predict(
+                            field_model,
+                            primary_path,
+                            field_resolution,
+                            field_confidence,
+                        )
+                        annotation_path = _save_annotation(
+                            field_result,
+                            record_dir / f"label_{primary_index:02d}_fields_annotated.jpg",
+                        )
+                        if annotation_path:
+                            field_annotations.append(annotation_path)
+                    else:
+                        fields = []
+                        annotation_path = ""
                     selected_fields = sorted(
                         fields[:max_fields],
                         key=lambda item: (item["bbox"][1], item["bbox"][0]),
@@ -429,7 +437,8 @@ def detect_hespi_lite_layout(
                             "primary_label_crop_path": str(primary_path),
                             "fixture_label_text": clean_str(record.get("fixture_label_text", "")),
                         }
-                        selected_rows.append(field_record)
+                        if not hybrid or include_label_fields:
+                            selected_rows.append(field_record)
                         field_rows.append({
                             **field_record,
                             "field_annotation_path": annotation_path,
@@ -466,7 +475,7 @@ def detect_hespi_lite_layout(
                     ))
                 elif hybrid and not primary:
                     fallback_reason = "no_primary_label_detected"
-                elif hybrid and n_fields == 0:
+                elif hybrid and include_label_fields and n_fields == 0:
                     fallback_reason = "no_label_fields_detected"
             except Exception as exc:
                 fallback_reason = f"hespi_detection_failed:{type(exc).__name__}:{exc}"

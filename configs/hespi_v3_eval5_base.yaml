@@ -1,0 +1,9 @@
+extends: configs/hespi_v2_eval20_hybrid.yaml
+sampling:
+  frozen_eval_size: 5
+paths:
+  reports_dir: reports/hespi_v3_calibration
+rag:
+  enabled: false
+  use_demo_examples: false
+  top_k: 0

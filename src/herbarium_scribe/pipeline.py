@@ -11,7 +11,7 @@ import pandas as pd
 from .config import load_config
 from .paths import ensure_dirs, repo_root, resolve_path
 from .metadata import load_metadata, save_metadata_copy, clean_str
-from .sampling import make_demo_eval_split, save_split_outputs
+from .sampling import make_demo_eval_split, save_split_outputs, stratified_random_sample
 from .download import run_download
 from .layout import detect_layout
 from .ocr import run_ocr
@@ -54,6 +54,30 @@ def stage_metadata(config_path: str | Path) -> tuple[pd.DataFrame, pd.DataFrame,
         demo = pd.read_csv(frozen_dir / "demo_set.csv", dtype=str).fillna("")
         eval_df = pd.read_csv(frozen_dir / "eval_set.csv", dtype=str).fillna("")
         summary = pd.read_csv(frozen_dir / "split_summary.csv", dtype=str).fillna("")
+        original_demo_size = len(demo)
+        original_eval_size = len(eval_df)
+        sampling_cfg = cfg.get("sampling", {})
+        seed = int(cfg.get("project", {}).get("random_state", 42))
+        by = sampling_cfg.get("stratify_by", "institutionCode")
+        frozen_demo_size = int(sampling_cfg.get("frozen_demo_size", len(demo)))
+        frozen_eval_size = int(sampling_cfg.get("frozen_eval_size", len(eval_df)))
+        if frozen_demo_size < len(demo):
+            demo = stratified_random_sample(demo, frozen_demo_size, by, seed + 201).reset_index(drop=True)
+        if frozen_eval_size < len(eval_df):
+            eval_df = stratified_random_sample(eval_df, frozen_eval_size, by, seed + 202).reset_index(drop=True)
+        if frozen_demo_size < original_demo_size or frozen_eval_size < original_eval_size:
+            rows = []
+            for split_name, frame in [("DEMO_SET", demo), ("EVAL_SET", eval_df)]:
+                counts = frame[by].value_counts(dropna=False).to_dict() if by in frame.columns else {"all": len(frame)}
+                for stratum, count in counts.items():
+                    rows.append({
+                        "split": split_name,
+                        "stratify_by": by,
+                        "stratum": stratum,
+                        "n": int(count),
+                        "split_mode": "frozen_stratified_subset",
+                    })
+            summary = pd.DataFrame(rows)
         overlap = set(demo["occurrenceID"]) & set(eval_df["occurrenceID"])
         if overlap:
             raise ValueError(f"Frozen DEMO_SET and EVAL_SET overlap: {sorted(overlap)[:5]}")
@@ -221,6 +245,8 @@ def _llm_static_metadata(cfg: dict[str, Any], backend: str) -> dict[str, Any]:
             "api_key_present": bool(os.environ.get("DEEPSEEK_API_KEY") or os.environ.get("DEEPSEEK_API_KEY_SELF")),
             "base_url": os.environ.get("DEEPSEEK_BASE_URL") or lcfg.get("base_url") or "https://api.deepseek.com",
             "min_interval_seconds": float(os.environ.get("DEEPSEEK_MIN_INTERVAL_SECONDS") or lcfg.get("min_interval_seconds") or 0),
+            "thinking": lcfg.get("thinking", ""),
+            "response_format": lcfg.get("response_format", ""),
         }
     return {
         "backend": backend,
@@ -232,6 +258,8 @@ def _llm_static_metadata(cfg: dict[str, Any], backend: str) -> dict[str, Any]:
         "api_key_present": False,
         "base_url": lcfg.get("base_url", ""),
         "min_interval_seconds": float(lcfg.get("min_interval_seconds", 0) or 0),
+        "thinking": lcfg.get("thinking", ""),
+        "response_format": lcfg.get("response_format", ""),
     }
 
 
@@ -312,7 +340,17 @@ def stage_extract(config_path: str | Path) -> pd.DataFrame:
             ctx = format_context_for_prompt(retrieved)
             prompt = f"Context:\n{ctx}\n\nOCR text:\n{prompt_text}" if retrieved else f"OCR text:\n{prompt_text}"
             messages = [
-                {"role": "system", "content": "Extract herbarium label fields as JSON. Return one object with keys catalogNumber, scientificName, recordedBy, eventDate, country, stateProvince, decimalLatitude, decimalLongitude, and typeStatus. Each field must be an object with value, confidence, and evidence_span. Return JSON only."},
+                {
+                    "role": "system",
+                    "content": (
+                        "Extract herbarium label fields as JSON. Return one JSON object with keys "
+                        "catalogNumber, scientificName, recordedBy, eventDate, country, stateProvince, "
+                        "decimalLatitude, decimalLongitude, and typeStatus. Each field must be an object "
+                        'like {"value":"verbatim or normalized value","confidence":0.0,"evidence_span":"exact OCR evidence"}. '
+                        "Use an empty value and empty evidence_span when the OCR does not support a field. "
+                        "Do not infer unsupported countries, dates, people, coordinates, or taxa. Return JSON only."
+                    ),
+                },
                 {"role": "user", "content": prompt},
             ]
             with rag_jsonl.open("a", encoding="utf-8") as f:
@@ -333,6 +371,8 @@ def stage_extract(config_path: str | Path) -> pd.DataFrame:
                     "requested_model": meta.get("requested_model", ""),
                     "actual_model_if_available": meta.get("actual_model", ""),
                     "min_interval_seconds": meta.get("min_interval_seconds", 0.0),
+                    "thinking": meta.get("thinking", {}),
+                    "response_format": meta.get("response_format", {}),
                     "prompt": prompt,
                     "retrieved_context": retrieved,
                     "raw_output": raw,
@@ -386,6 +426,8 @@ def stage_extract(config_path: str | Path) -> pd.DataFrame:
                 "actual_model_if_available": meta.get("actual_model", ""),
                 "endpoint_reachable": bool(meta.get("endpoint_reachable", False)),
                 "min_interval_seconds": meta.get("min_interval_seconds", 0.0),
+                "thinking": json.dumps(meta.get("thinking", {}), ensure_ascii=False),
+                "response_format": json.dumps(meta.get("response_format", {}), ensure_ascii=False),
                 "response_finish_reason": finish_reason,
                 "response_message_keys": json.dumps(message_keys, ensure_ascii=False),
                 "response_usage": json.dumps(meta.get("usage", {}), ensure_ascii=False),
