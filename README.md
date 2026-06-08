@@ -158,6 +158,12 @@ The manual **Hespi v3 five-record calibration** workflow tests DeepSeek thinking
 
 See [`docs/hespi_v3_calibration.md`](docs/hespi_v3_calibration.md) for decision thresholds and artifact paths.
 
+## Hespi v4 repeat stability
+
+The manual **Hespi v4 eval10 repeated lean stability** workflow builds one frozen ten-image Lean OCR package and calls DeepSeek three times with identical prompt hashes. It reports output agreement, evidence support, consensus predictions, and a field-level human-review queue.
+
+See [`docs/hespi_v4_repeat10.md`](docs/hespi_v4_repeat10.md) for evidence statuses and acceptance rules.
+
 ## Main limitations
 
 The fixture dataset is small and hand-written, so it only checks that the pipeline is complete and defensible. It does not estimate real-world SCRIBE performance. The default OCR path can run without real OCR if no image engine is installed, which is useful for testing but should not be presented as production OCR accuracy. The optional Qwen, PaddleOCR, GBIF, and GeoNames paths are intentionally separated because they may need more memory, installed binaries, internet access, or service-specific rate handling.

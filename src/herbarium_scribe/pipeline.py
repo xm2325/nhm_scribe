@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import hashlib
 import os
 import re
 from pathlib import Path
@@ -348,11 +349,15 @@ def stage_extract(config_path: str | Path) -> pd.DataFrame:
                         "decimalLatitude, decimalLongitude, and typeStatus. Each field must be an object "
                         'like {"value":"verbatim or normalized value","confidence":0.0,"evidence_span":"exact OCR evidence"}. '
                         "Use an empty value and empty evidence_span when the OCR does not support a field. "
-                        "Do not infer unsupported countries, dates, people, coordinates, or taxa. Return JSON only."
+                        "Every non-empty field must include an evidence_span copied exactly from the supplied OCR. "
+                        "Country, stateProvince, eventDate, recordedBy, and coordinates must remain empty unless "
+                        "their source text is explicit in OCR. Never repair uncertain OCR by guessing. Return JSON only."
                     ),
                 },
                 {"role": "user", "content": prompt},
             ]
+            messages_json = json.dumps(messages, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+            prompt_sha256 = hashlib.sha256(messages_json.encode("utf-8")).hexdigest()
             with rag_jsonl.open("a", encoding="utf-8") as f:
                 f.write(json.dumps({"occurrenceID": occ, "method": method_name, "backend": backend, "retrieved_context": retrieved}, ensure_ascii=False) + "\n")
             llm_call_attempted = not bool(gate_reason)
@@ -374,6 +379,8 @@ def stage_extract(config_path: str | Path) -> pd.DataFrame:
                     "thinking": meta.get("thinking", {}),
                     "response_format": meta.get("response_format", {}),
                     "prompt": prompt,
+                    "messages": messages,
+                    "prompt_sha256": prompt_sha256,
                     "retrieved_context": retrieved,
                     "raw_output": raw,
                     "raw_output_length": len(raw),
@@ -428,6 +435,7 @@ def stage_extract(config_path: str | Path) -> pd.DataFrame:
                 "min_interval_seconds": meta.get("min_interval_seconds", 0.0),
                 "thinking": json.dumps(meta.get("thinking", {}), ensure_ascii=False),
                 "response_format": json.dumps(meta.get("response_format", {}), ensure_ascii=False),
+                "prompt_sha256": prompt_sha256,
                 "response_finish_reason": finish_reason,
                 "response_message_keys": json.dumps(message_keys, ensure_ascii=False),
                 "response_usage": json.dumps(meta.get("usage", {}), ensure_ascii=False),
@@ -519,7 +527,8 @@ def stage_evaluate(config_path: str | Path) -> tuple[pd.DataFrame, pd.DataFrame,
     ocr_path = paths["processed"] / "ocr_by_region.csv"
     ocr_df = pd.read_csv(ocr_path, dtype=str).fillna("") if ocr_path.exists() else stage_ocr(config_path)
     fields = cfg.get("evaluation", {}).get("fields", [])
-    detail, summary, strat = evaluate_predictions(pred, eval_df, ocr_df, fields, paths)
+    review_config = cfg.get("evaluation", {}).get("review", {})
+    detail, summary, strat = evaluate_predictions(pred, eval_df, ocr_df, fields, paths, review_config)
     _write_prefixed_csv(detail, paths, cfg, "evaluation_detail.csv")
     _write_prefixed_csv(summary, paths, cfg, "evaluation_summary.csv")
     _write_prefixed_csv(strat, paths, cfg, "evaluation_by_ocr_tertile.csv")

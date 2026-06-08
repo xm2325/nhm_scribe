@@ -1,0 +1,22 @@
+extends: configs/hespi_v4_eval10_shared_lean.yaml
+method_name: deepseek_v4_pro_nonthinking_lean
+llm:
+  backend: deepseek_api
+  base_url: https://api.deepseek.com
+  model_name: deepseek-v4-pro
+  thinking: disabled
+  response_format: json_object
+  temperature: 0.0
+  max_tokens: 1500
+  timeout_seconds: 300
+  retries: 3
+  retry_backoff_seconds: 20
+  min_interval_seconds: 1.0
+  evidence_gate:
+    enabled: true
+    require_image: true
+    min_alphanumeric_characters: 10
+rag:
+  enabled: false
+  use_demo_examples: false
+  top_k: 0

@@ -72,6 +72,18 @@ reconciliation:
   gbif_cache_path: data/processed/gbif_match_cache.json
 
 evaluation:
+  review:
+    min_confidence: 0.75
+    high_risk_min_confidence: 0.90
+    accepted_support_statuses:
+      - direct
+    high_risk_fields:
+      - country
+      - stateProvince
+      - eventDate
+      - recordedBy
+      - decimalLatitude
+      - decimalLongitude
   fields:
     - catalogNumber
     - scientificName

@@ -168,6 +168,7 @@ def _method_comparison(eval_summary: pd.DataFrame) -> pd.DataFrame:
         "evidence_span_present_rate",
         "direct_evidence_support_rate",
         "unsupported_prediction_rate",
+        "review_required_rate",
     ]:
         if column in eval_summary.columns:
             agg[column] = (column, "mean")

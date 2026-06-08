@@ -1,0 +1,18 @@
+extends: configs/hespi_v2_eval20_hybrid.yaml
+method_name: rule_ocr
+paths:
+  data_dir: data/experiments/hespi_v4_eval10_shared
+  reports_dir: reports/hespi_v4_repeat10
+sampling:
+  frozen_eval_size: 10
+layout:
+  include_whole_sheet: true
+  include_primary_labels: true
+  include_supplemental_components: true
+  include_label_fields: false
+llm:
+  backend: none
+outputs:
+  prefix: hespi_v4_eval10_shared
+  prediction_name: rule
+  report_name: hespi_v4_eval10_shared_report.md

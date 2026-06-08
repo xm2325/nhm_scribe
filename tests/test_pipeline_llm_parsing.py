@@ -1,3 +1,6 @@
+import hashlib
+import json
+
 import pandas as pd
 
 from herbarium_scribe.pipeline import _parse_llm_json, stage_extract
@@ -72,6 +75,9 @@ evaluation:
     raw = (data_dir / "interim" / "llm" / "smoke_outputs.jsonl").read_text(encoding="utf-8")
     assert '"response_body"' in raw
     assert '"response_finish_reason": "stop"' in raw
+    item = json.loads(raw)
+    messages_json = json.dumps(item["messages"], ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+    assert item["prompt_sha256"] == hashlib.sha256(messages_json.encode("utf-8")).hexdigest()
 
 
 def test_empty_ocr_evidence_skips_llm_call(tmp_path, monkeypatch):

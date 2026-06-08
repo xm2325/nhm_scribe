@@ -1,0 +1,13 @@
+extends: configs/hespi_v4_eval10_repeat_base.yaml
+paths:
+  data_dir: data/experiments/hespi_v4_eval10_repeat_2
+experiment:
+  title: "Hespi v4 Eval10 Lean Repeat 2"
+outputs:
+  prefix: hespi_v4_eval10_repeat_2
+  prediction_name: deepseek_nonthinking_lean
+  llm_artifact_family: hespi_v4_eval10_repeat_2
+  llm_outputs_name: hespi_v4_eval10_repeat_2_outputs.jsonl
+  llm_diagnostics_name: hespi_v4_eval10_repeat_2_diagnostics.csv
+  llm_diagnostics_json_name: hespi_v4_eval10_repeat_2_diagnostics.json
+  report_name: hespi_v4_eval10_repeat_2_report.md

@@ -1,0 +1,141 @@
+name: Hespi v4 eval10 repeated lean stability
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - .github/run-hespi-v4-repeat10.trigger
+  workflow_dispatch:
+
+jobs:
+  repeat10:
+    runs-on: ubuntu-latest
+    timeout-minutes: 300
+    env:
+      DEEPSEEK_API_KEY: ${{ secrets.DEEPSEEK_API_KEY_SELF }}
+      DEEPSEEK_BASE_URL: https://api.deepseek.com
+      DEEPSEEK_MODEL: deepseek-v4-pro
+      DEEPSEEK_MIN_INTERVAL_SECONDS: "1.0"
+    steps:
+      - name: Checkout repository anonymously
+        run: |
+          git init .
+          git remote add origin https://github.com/${{ github.repository }}.git
+          git fetch --depth=1 origin ${{ github.sha }}
+          git checkout --detach FETCH_HEAD
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+
+      - name: Cache Hespi model downloads
+        uses: actions/cache@v5
+        with:
+          path: ~/.cache/hespi
+          key: hespi-0.6.2-${{ runner.os }}
+
+      - name: Install OCR system dependency
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y tesseract-ocr
+
+      - name: Install package with Hespi
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -e '.[dev,hespi]'
+
+      - name: Check DeepSeek official API configuration
+        run: |
+          if [ -z "${DEEPSEEK_API_KEY}" ]; then
+            echo "::error::Repository secret DEEPSEEK_API_KEY_SELF is not configured"
+            exit 1
+          fi
+
+      - name: Run tests
+        run: python -m pytest
+
+      - name: Build validated shared image set
+        run: |
+          mkdir -p reports/hespi_v2 reports/hespi_v4_repeat10
+          set -o pipefail
+          python scripts/prepare_hespi_v2_paired_eval.py 2>&1 | tee reports/hespi_v4_repeat10/acquisition.log
+
+      - name: Run Lean layout and OCR once
+        run: python scripts/run_pipeline.py --config configs/hespi_v4_eval10_shared_lean.yaml
+
+      - name: Freeze shared OCR inputs for three repeats
+        run: python scripts/prepare_hespi_v4_repeats.py
+
+      - name: Run Lean repeat 1
+        run: python scripts/run_hespi_v4_repeat.py --config configs/hespi_v4_eval10_repeat_1.yaml
+
+      - name: Run Lean repeat 2
+        run: python scripts/run_hespi_v4_repeat.py --config configs/hespi_v4_eval10_repeat_2.yaml
+
+      - name: Run Lean repeat 3
+        run: python scripts/run_hespi_v4_repeat.py --config configs/hespi_v4_eval10_repeat_3.yaml
+
+      - name: Build stability report
+        run: |
+          python scripts/compare_hespi_v4_repeat10.py
+          python scripts/build_hespi_v4_review_bundle.py
+
+      - name: Verify repeat integrity
+        run: |
+          python - <<'PY'
+          import json
+          from pathlib import Path
+          import pandas as pd
+
+          prompt_hashes = {}
+          for repeat in (1, 2, 3):
+              root = Path(f"data/experiments/hespi_v4_eval10_repeat_{repeat}")
+              prefix = f"hespi_v4_eval10_repeat_{repeat}"
+              eval_set = pd.read_csv(root / "processed" / "eval_set.csv", dtype=str).fillna("")
+              if len(eval_set) != 10:
+                  raise SystemExit(f"repeat {repeat}: expected 10 EVAL records, got {len(eval_set)}")
+              rows = [
+                  json.loads(line)
+                  for line in (root / "interim" / "llm" / f"{prefix}_outputs.jsonl").read_text(encoding="utf-8").splitlines()
+                  if line.strip()
+              ]
+              parsed = [
+                  row for row in rows
+                  if row.get("raw_output") and row.get("parse_failure") is False and not row.get("not_evaluated")
+              ]
+              if len(parsed) != 10:
+                  raise SystemExit(f"repeat {repeat}: expected 10 parsed records, got {len(parsed)}")
+              for row in rows:
+                  details = row.get("response_usage", {}).get("completion_tokens_details", {}) or {}
+                  if int(details.get("reasoning_tokens", 0) or 0) != 0:
+                      raise SystemExit(f"repeat {repeat}: non-zero reasoning tokens detected")
+                  occurrence_id = row["occurrenceID"]
+                  prompt_hashes.setdefault(occurrence_id, set()).add(row.get("prompt_sha256", ""))
+
+          if len(prompt_hashes) != 10 or any(len(values) != 1 or "" in values for values in prompt_hashes.values()):
+              raise SystemExit("The three repeats did not use identical prompt hashes")
+          report = Path("reports/hespi_v4_repeat10/hespi_v4_repeat10_report.md")
+          review = Path("reports/hespi_v4_repeat10/hespi_v4_consensus_review_queue.csv")
+          if not report.exists() or not review.exists():
+              raise SystemExit("Stability report or review queue is missing")
+          print(report)
+          PY
+
+      - name: Upload eval10 repeat outputs
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: herbarium-scribe-hespi-v4-repeat10-${{ github.run_id }}
+          retention-days: 30
+          path: |
+            data/experiments/hespi_v2_shared/processed/
+            data/experiments/hespi_v4_eval10_shared/processed/
+            data/experiments/hespi_v4_eval10_shared/interim/ocr/
+            data/experiments/hespi_v4_eval10_repeat_1/processed/
+            data/experiments/hespi_v4_eval10_repeat_1/interim/llm/
+            data/experiments/hespi_v4_eval10_repeat_2/processed/
+            data/experiments/hespi_v4_eval10_repeat_2/interim/llm/
+            data/experiments/hespi_v4_eval10_repeat_3/processed/
+            data/experiments/hespi_v4_eval10_repeat_3/interim/llm/
+            reports/hespi_v4_repeat10/

@@ -201,7 +201,78 @@ def assign_ocr_tertiles(scores: pd.Series) -> pd.Series:
         return pd.Series(labels, index=scores.index)
 
 
-def evaluate_predictions(pred_df: pd.DataFrame, gold_df: pd.DataFrame, ocr_df: pd.DataFrame, fields: list[str], paths: dict[str, Path] | None = None) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
+def evidence_support_status(
+    predicted: bool,
+    evidence_span: str,
+    evidence_support_score: float | None,
+    prediction_evidence_alignment: float | None,
+    prediction_ocr_support_score: float | None,
+) -> str:
+    if not predicted:
+        return "not_predicted"
+    aligned = prediction_evidence_alignment is not None and prediction_evidence_alignment >= 0.5
+    if evidence_support_score is not None and evidence_support_score >= 1.0 and aligned:
+        return "direct"
+    if evidence_support_score is not None and evidence_support_score >= 0.5 and aligned:
+        return "partial_direct"
+    if prediction_ocr_support_score is not None and prediction_ocr_support_score >= 1.0:
+        return "prediction_in_ocr"
+    if evidence_support_score is not None and evidence_support_score >= 1.0:
+        return "contextual_inference"
+    return "unsupported"
+
+
+def review_decision(
+    *,
+    field: str,
+    predicted: bool,
+    support_status: str,
+    confidence: float | None,
+    validation_warning: bool,
+    review_config: dict[str, Any] | None = None,
+) -> tuple[bool, str, str]:
+    if not predicted:
+        return False, "", ""
+    config = review_config or {}
+    min_confidence = float(config.get("min_confidence", 0.75))
+    high_risk_min_confidence = float(config.get("high_risk_min_confidence", 0.90))
+    high_risk_fields = set(config.get(
+        "high_risk_fields",
+        ["country", "stateProvince", "eventDate", "recordedBy", "decimalLatitude", "decimalLongitude"],
+    ))
+    accepted_support = set(config.get("accepted_support_statuses", ["direct"]))
+    reasons = []
+    if support_status not in accepted_support:
+        reasons.append(f"support:{support_status}")
+    if confidence is None or pd.isna(confidence):
+        reasons.append("confidence:missing")
+    elif confidence < min_confidence:
+        reasons.append(f"confidence_below:{min_confidence:g}")
+    if field in high_risk_fields:
+        if support_status != "direct":
+            reasons.append("high_risk_without_direct_evidence")
+        if confidence is None or pd.isna(confidence) or confidence < high_risk_min_confidence:
+            reasons.append(f"high_risk_confidence_below:{high_risk_min_confidence:g}")
+    if validation_warning:
+        reasons.append("schema_validation_warning")
+    if not reasons:
+        return False, "", ""
+    high_priority = (
+        support_status == "unsupported"
+        or (field in high_risk_fields and support_status != "direct")
+        or (confidence is not None and not pd.isna(confidence) and confidence < 0.5)
+    )
+    return True, "high" if high_priority else "medium", ";".join(dict.fromkeys(reasons))
+
+
+def evaluate_predictions(
+    pred_df: pd.DataFrame,
+    gold_df: pd.DataFrame,
+    ocr_df: pd.DataFrame,
+    fields: list[str],
+    paths: dict[str, Path] | None = None,
+    review_config: dict[str, Any] | None = None,
+) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
     gold = gold_df.set_index("occurrenceID")
     ocr_text = ocr_df.groupby("occurrenceID")["ocr_text"].apply("\n".join).to_dict() if len(ocr_df) else {}
     proxy_rows = []
@@ -232,12 +303,26 @@ def evaluate_predictions(pred_df: pd.DataFrame, gold_df: pd.DataFrame, ocr_df: p
                 if pred_val and evidence_span
                 else None
             )
+            prediction_ocr_support_score = evidence_proxy(pred_val, ocr_text.get(occ, "")) if pred_val else None
             evaluable = bool(gold_val) and not not_evaluated
             predicted = bool(pred_val) and not not_evaluated
-            direct_evidence_supported = (
-                int(evidence_support_score >= 1.0 and prediction_evidence_alignment >= 0.5)
-                if predicted and evidence_support_score is not None and prediction_evidence_alignment is not None
-                else (0 if predicted else np.nan)
+            support_status = evidence_support_status(
+                predicted,
+                evidence_span,
+                evidence_support_score,
+                prediction_evidence_alignment,
+                prediction_ocr_support_score,
+            )
+            direct_evidence_supported = int(support_status == "direct") if predicted else np.nan
+            confidence = pd.to_numeric(prow.get(f"{field}_confidence", np.nan), errors="coerce")
+            validation_warning = bool(clean_str(prow.get("validation_warnings", "")))
+            review_required, review_priority, review_reasons = review_decision(
+                field=field,
+                predicted=predicted,
+                support_status=support_status,
+                confidence=confidence,
+                validation_warning=validation_warning,
+                review_config=review_config,
             )
             rows.append({
                 "occurrenceID": occ,
@@ -255,10 +340,15 @@ def evaluate_predictions(pred_df: pd.DataFrame, gold_df: pd.DataFrame, ocr_df: p
                 "evidence_span_present": int(bool(evidence_span)) if predicted else np.nan,
                 "evidence_span_ocr_support_score": evidence_support_score if predicted else np.nan,
                 "prediction_evidence_alignment_score": prediction_evidence_alignment if predicted else np.nan,
+                "prediction_ocr_support_score": prediction_ocr_support_score if predicted else np.nan,
+                "evidence_support_status": support_status,
                 "direct_evidence_supported": direct_evidence_supported,
                 "unsupported_prediction": (1 - direct_evidence_supported) if predicted else np.nan,
-                "prediction_confidence": pd.to_numeric(prow.get(f"{field}_confidence", np.nan), errors="coerce"),
-                "validation_warning": int(bool(clean_str(prow.get("validation_warnings", "")))),
+                "prediction_confidence": confidence,
+                "review_required": int(review_required) if predicted else np.nan,
+                "review_priority": review_priority,
+                "review_reasons": review_reasons,
+                "validation_warning": int(validation_warning),
                 "parse_failure": int(truthy_flag(prow.get("parse_failure", False))),
                 "not_evaluated": int(not_evaluated),
                 "ocr_quality_tertile": proxy_map.get(occ, {}).get("ocr_quality_tertile", "unknown"),
@@ -276,6 +366,7 @@ def evaluate_predictions(pred_df: pd.DataFrame, gold_df: pd.DataFrame, ocr_df: p
             evidence_span_present_rate=("evidence_span_present", "mean"),
             direct_evidence_support_rate=("direct_evidence_supported", "mean"),
             unsupported_prediction_rate=("unsupported_prediction", "mean"),
+            review_required_rate=("review_required", "mean"),
             n=("evaluable", "sum"),
         )
         strat = detail.groupby(["method", "ocr_quality_tertile", "field"], as_index=False).agg(
@@ -293,4 +384,6 @@ def evaluate_predictions(pred_df: pd.DataFrame, gold_df: pd.DataFrame, ocr_df: p
         summary.to_csv(paths["processed"] / "eval_summary.csv", index=False)
         strat.to_csv(paths["processed"] / "eval_stratified_by_ocr_tertile.csv", index=False)
         proxy.to_csv(paths["processed"] / "ocr_proxy_field_presence.csv", index=False)
+        review_queue = detail[detail["review_required"].eq(1)].copy()
+        review_queue.to_csv(paths["processed"] / "review_queue.csv", index=False)
     return detail, summary, strat

@@ -4,10 +4,12 @@ from herbarium_scribe.evaluate import (
     assign_ocr_tertiles,
     evaluate_predictions,
     evidence_proxy,
+    evidence_support_status,
     exact_match,
     field_exact_match,
     field_token_f1,
     normalize_field_value,
+    review_decision,
     token_f1,
     truthy_flag,
 )
@@ -80,8 +82,33 @@ def test_evaluation_reports_direct_ocr_evidence_support():
     catalog = detail[detail["field"] == "catalogNumber"].iloc[0]
     country = detail[detail["field"] == "country"].iloc[0]
     assert catalog["direct_evidence_supported"] == 1
+    assert catalog["evidence_support_status"] == "direct"
+    assert catalog["review_required"] == 0
     assert country["unsupported_prediction"] == 1
+    assert country["review_required"] == 1
+    assert country["review_priority"] == "high"
     assert summary["unsupported_prediction_rate"].mean() == 0.5
+
+
+def test_evidence_status_and_review_gate_distinguish_contextual_inference():
+    status = evidence_support_status(
+        True,
+        "Date? (4.1960",
+        1.0,
+        0.0,
+        0.0,
+    )
+    required, priority, reasons = review_decision(
+        field="eventDate",
+        predicted=True,
+        support_status=status,
+        confidence=0.8,
+        validation_warning=False,
+    )
+    assert status == "contextual_inference"
+    assert required is True
+    assert priority == "high"
+    assert "high_risk_without_direct_evidence" in reasons
 
 
 def test_rag_delta_reports_no_rag_only(tmp_path):
