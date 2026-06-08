@@ -11,6 +11,12 @@ PROCESSED = ROOT / "processed"
 LLM = ROOT / "interim" / "llm"
 REPORT_DIR = Path("reports/hespi_v5_eval10")
 METHOD = "deepseek_v4_pro_nonthinking_barcode_gbif"
+V4_REFERENCE = {
+    "run_id": 27160844627,
+    "coverage": 0.30357142857142855,
+    "exact_match": 0.125,
+    "token_f1": 0.15625,
+}
 
 
 def read_csv(path: Path) -> pd.DataFrame:
@@ -57,6 +63,10 @@ def main() -> None:
 
     ocr = read_csv(PROCESSED / "ocr_by_region.csv")
     barcode = ocr[ocr.get("ocr_engine", pd.Series(dtype=str)).eq("zxingcpp")].copy()
+    eval_set = read_csv(PROCESSED / "eval_set.csv")
+    if not eval_set.empty:
+        eval_ids = set(eval_set["occurrenceID"].astype(str))
+        barcode = barcode[barcode["occurrenceID"].astype(str).isin(eval_ids)].copy()
     if not barcode.empty:
         barcode["barcode_count"] = numeric(barcode, "barcode_count").fillna(0).astype(int)
         barcode_view = barcode[[
@@ -118,6 +128,9 @@ def main() -> None:
         "taxonomy_corrections": len(corrections),
         "total_tokens": total_tokens,
     }])
+    summary["coverage_delta_vs_v4"] = summary["coverage"] - V4_REFERENCE["coverage"]
+    summary["exact_match_delta_vs_v4"] = summary["exact_match"] - V4_REFERENCE["exact_match"]
+    summary["token_f1_delta_vs_v4"] = summary["token_f1"] - V4_REFERENCE["token_f1"]
     summary.to_csv(REPORT_DIR / "hespi_v5_summary.csv", index=False)
     field_metrics.to_csv(REPORT_DIR / "hespi_v5_field_metrics.csv", index=False)
     barcode_view.to_csv(REPORT_DIR / "hespi_v5_barcode_diagnostics.csv", index=False)
@@ -129,6 +142,7 @@ def main() -> None:
         and float(row["exact_match"]) >= 0.20
         and float(row["token_f1"]) >= 0.25
         and float(row["unsupported_prediction_rate"]) <= 0.15
+        and float(row["review_required_rate"]) <= 0.30
     )
     lines = [
         "# Hespi v5 Eval10 Barcode + GBIF Report\n",
@@ -137,6 +151,7 @@ def main() -> None:
         "- ZXing-C++ barcode decoding augments, but does not replace, Tesseract OCR.\n",
         "- GBIF correction is allowed only when confidence is at least 90 and the parsed binomial is unchanged.\n",
         "- RAG is disabled and DeepSeek thinking is disabled.\n",
+        f"- Historical reference: Hespi v4 repeat 1, GitHub Actions run `{V4_REFERENCE['run_id']}`.\n",
         "\n## Summary\n",
         markdown(summary),
         "\n## Field metrics\n",
@@ -147,7 +162,7 @@ def main() -> None:
         markdown(corrections),
         "\n## Scale decision\n",
         f"- Ready for a larger evaluation: `{scale_ready}`.\n",
-        "- Gates: parse success >=95%, exact match >=20%, token F1 >=25%, unsupported predictions <=15%.\n",
+        "- Gates: parse success >=95%, exact match >=20%, token F1 >=25%, unsupported predictions <=15%, human review <=30%.\n",
         "\n## Interpretation guardrails\n",
         "- A decoded barcode is direct image evidence, but multiple barcodes on one sheet remain ambiguous.\n",
         "- A GBIF correction can repair authorship spelling; it cannot recover a missing or badly corrupted binomial.\n",
