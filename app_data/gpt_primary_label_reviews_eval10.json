@@ -1,0 +1,580 @@
+{
+  "dataset_name": "gpt_primary_label_reviews_eval10",
+  "dataset_title": "GPT primary-label reviews for the ten-image Hespi v10 evaluation set",
+  "description": "Manually reviewed GPT multimodal transcriptions and structured field readings for the ten-image Hespi v10 evaluation set. These records are shown inside the existing Hespi v10 Streamlit page as an added comparison layer.",
+  "record_count": 10,
+  "source_note": "This JSON stores the GPT review content only. Existing Hespi OCR / HTR outputs remain in hespi_v10_ocr_visual_report.zip.",
+  "order_note": "The records follow the ten-image Hespi v10 review order.",
+  "records": [
+    {
+      "catalog_reference": "L  0039590",
+      "display_identifier": "L  0039590",
+      "input_mode": "hespi_primary_label_multi_crop",
+      "primary_label_available": true,
+      "gpt_full_transcription": "[Primary-label crop 1]\nMALAY PENINSULA.\nPULAU PENANG.\n3020\n\nNative Name: [blank]\nBotanical: Helicia Curtisii Gamble\nLocality: Penang Bukit [unclear]\nElevation: [blank]\nDate: July 1893.\nCollector: Curtis\n\n[G.P.D.-3,000-May, 96.]\n\n[Primary-label crop 2]\nRevised for Flora Malesiana\nHelicia serrata (R.Br.) Bl. [authority partly unclear]\n= H. curtisii Gamble\nIsotypus\ndet. H. Sleumer (O) 1954",
+      "gpt_analysis": "Two detected primary-label crops were reviewed together. The first crop contains collecting information. The second crop contains a later taxonomic revision and the type-status annotation. The structured GPT fields combine evidence from both crops.",
+      "fields": {
+        "catalogNumber": {
+          "value": "",
+          "confidence": 0.0,
+          "evidence_span": ""
+        },
+        "scientificName": {
+          "value": "Helicia serrata (R.Br.) Bl.",
+          "confidence": 0.88,
+          "evidence_span": "Helicia serrata (R.Br.) Bl. = H. curtisii Gamble"
+        },
+        "recordedBy": {
+          "value": "Curtis",
+          "confidence": 0.7,
+          "evidence_span": "Curtis"
+        },
+        "eventDate": {
+          "value": "1893-07",
+          "confidence": 0.72,
+          "evidence_span": "Date July 1893"
+        },
+        "country": {
+          "value": "Malay Peninsula",
+          "confidence": 0.82,
+          "evidence_span": "MALAY PENINSULA"
+        },
+        "stateProvince": {
+          "value": "Pulau Penang",
+          "confidence": 0.92,
+          "evidence_span": "PULAU PENANG"
+        },
+        "decimalLatitude": {
+          "value": "",
+          "confidence": 0.0,
+          "evidence_span": ""
+        },
+        "decimalLongitude": {
+          "value": "",
+          "confidence": 0.0,
+          "evidence_span": ""
+        },
+        "typeStatus": {
+          "value": "isotypus",
+          "confidence": 0.84,
+          "evidence_span": "Isotypus"
+        }
+      },
+      "normalized_key": "l0039590",
+      "eval10_order": 1
+    },
+    {
+      "catalog_reference": "L.2489324",
+      "display_identifier": "L.2489324",
+      "input_mode": "hespi_primary_label_crop",
+      "primary_label_available": true,
+      "gpt_full_transcription": "LeProvost\nEnvironmental\nConsultants\n\nTel.: 61 9 474 1933\nFax: 61 9 368 2294\nJob No.: J248\n\nName: Ceriops decandra\nLocality: Benoa Bay, Bali, Indonesia\nNotes: growing amongst low Avicennia marina and\nBruguiera gymnorrhiza (?) in a rehabilitation area,\nseaward of a road across Suwung Swamp delta,\nSW Benoa Bay.\nLeaves, flowers, bark preserved.\n\nColl.: David Gordon\n       Anthony Bougher\nNo.: M14\n22 / 9 / 1992\n\nDet.: [blank]",
+      "gpt_analysis": "The printed field label is clear. GPT recovered the taxon, locality, collectors, collection number, and complete date. The collection number M14 is not treated as the specimen catalogue number.",
+      "fields": {
+        "catalogNumber": {
+          "value": "",
+          "confidence": 0.0,
+          "evidence_span": ""
+        },
+        "scientificName": {
+          "value": "Ceriops decandra",
+          "confidence": 0.99,
+          "evidence_span": "Ceriops decandra"
+        },
+        "recordedBy": {
+          "value": "David Gordon; Anthony Bougher",
+          "confidence": 0.98,
+          "evidence_span": "David Gordon / Anthony Bougher"
+        },
+        "eventDate": {
+          "value": "1992-09-22",
+          "confidence": 0.99,
+          "evidence_span": "22 / 9 / 1992"
+        },
+        "country": {
+          "value": "Indonesia",
+          "confidence": 0.99,
+          "evidence_span": "Benoa Bay, Bali, Indonesia"
+        },
+        "stateProvince": {
+          "value": "Bali",
+          "confidence": 0.98,
+          "evidence_span": "Benoa Bay, Bali, Indonesia"
+        },
+        "decimalLatitude": {
+          "value": "",
+          "confidence": 0.0,
+          "evidence_span": ""
+        },
+        "decimalLongitude": {
+          "value": "",
+          "confidence": 0.0,
+          "evidence_span": ""
+        },
+        "typeStatus": {
+          "value": "",
+          "confidence": 0.0,
+          "evidence_span": ""
+        }
+      },
+      "normalized_key": "l2489324",
+      "eval10_order": 2
+    },
+    {
+      "catalog_reference": "E00120084",
+      "display_identifier": "E00120084",
+      "input_mode": "whole_sheet_fallback_no_primary_label_detected",
+      "primary_label_available": false,
+      "gpt_full_transcription": "[Whole-sheet fallback: Hespi did not detect a primary label]\n\nImpatiens siculifer Hook.f.\nDeterminavit H. F. Comber [surname partly unclear]\n\nROYAL BOTANIC GARDEN\nEDINBURGH\nE00120084\n\nG. Forrest\n7687\nYunnan",
+      "gpt_analysis": "Hespi did not detect a primary-label crop for this record. GPT reviewed the whole-sheet fallback image. This result must not be treated as a primary-label-only result.",
+      "fields": {
+        "catalogNumber": {
+          "value": "E00120084",
+          "confidence": 0.99,
+          "evidence_span": "E00120084"
+        },
+        "scientificName": {
+          "value": "Impatiens siculifer Hook.f.",
+          "confidence": 0.88,
+          "evidence_span": "Impatiens siculifer Hook.f."
+        },
+        "recordedBy": {
+          "value": "G. Forrest",
+          "confidence": 0.94,
+          "evidence_span": "G. Forrest"
+        },
+        "eventDate": {
+          "value": "",
+          "confidence": 0.0,
+          "evidence_span": ""
+        },
+        "country": {
+          "value": "",
+          "confidence": 0.0,
+          "evidence_span": ""
+        },
+        "stateProvince": {
+          "value": "Yunnan",
+          "confidence": 0.96,
+          "evidence_span": "Yunnan"
+        },
+        "decimalLatitude": {
+          "value": "",
+          "confidence": 0.0,
+          "evidence_span": ""
+        },
+        "decimalLongitude": {
+          "value": "",
+          "confidence": 0.0,
+          "evidence_span": ""
+        },
+        "typeStatus": {
+          "value": "",
+          "confidence": 0.0,
+          "evidence_span": ""
+        }
+      },
+      "normalized_key": "e00120084",
+      "eval10_order": 3
+    },
+    {
+      "catalog_reference": "P00116877",
+      "display_identifier": "P00116877",
+      "input_mode": "hespi_primary_label_crop",
+      "primary_label_available": true,
+      "gpt_full_transcription": "P00116877\nHERB. MUS. PARIS.\n\nLeandra alterninervis Cogn.\n\nBRÉSIL\n\nHerbier de A. GLAZIOU\ndonné par Mme SIMARD, sa fille, en 1907.\n\nLöfgren 838 x 776",
+      "gpt_analysis": "The crop contains a Paris herbarium label and a handwritten note. GPT extracted only values that are visually supported. The handwritten Löfgren numbers are not treated as the specimen catalogue number.",
+      "fields": {
+        "catalogNumber": {
+          "value": "P00116877",
+          "confidence": 0.99,
+          "evidence_span": "P00116877"
+        },
+        "scientificName": {
+          "value": "Leandra alterninervis Cogn.",
+          "confidence": 0.93,
+          "evidence_span": "Leandra alterninervis Cogn."
+        },
+        "recordedBy": {
+          "value": "Löfgren",
+          "confidence": 0.82,
+          "evidence_span": "Löfgren 838 x 776"
+        },
+        "eventDate": {
+          "value": "",
+          "confidence": 0.0,
+          "evidence_span": ""
+        },
+        "country": {
+          "value": "Brazil",
+          "confidence": 0.98,
+          "evidence_span": "BRÉSIL"
+        },
+        "stateProvince": {
+          "value": "",
+          "confidence": 0.0,
+          "evidence_span": ""
+        },
+        "decimalLatitude": {
+          "value": "",
+          "confidence": 0.0,
+          "evidence_span": ""
+        },
+        "decimalLongitude": {
+          "value": "",
+          "confidence": 0.0,
+          "evidence_span": ""
+        },
+        "typeStatus": {
+          "value": "",
+          "confidence": 0.0,
+          "evidence_span": ""
+        }
+      },
+      "normalized_key": "p00116877",
+      "eval10_order": 4
+    },
+    {
+      "catalog_reference": "B 10 0190397",
+      "display_identifier": "B100190397",
+      "input_mode": "hespi_primary_label_crop",
+      "primary_label_available": true,
+      "gpt_full_transcription": "EX HERB. HORT. BOT. REG. KEW.\nFLORA OF TANGANYIKA\n\nName: Barleria sp. [& / symbol unclear] Somalia\n      ? sp. nr. B. splendens E. A. Bruce\nNative Name: [blank]\n\nLocality & Habitat:\nKigoma Distr., Kigoma to Kasulu mile 23\nIn Protea, Brachystegia, Combretum,\nStrychnos, Diplorhynchus woodland with\nHyparrhenia\n\nDate: 14.7.1960\nAltitude: ? 4,000'\n\nNotes:\nErect herb 2 ft. 6\" tall. Flowers lilac,\nanthers cream turning dark.\n\nCollector: B. Verdcourt\nNo. 2808\n\n[stamp partly unclear: 14.MAI.61]",
+      "gpt_analysis": "The printed Tanganyika field label is readable, while the species-level handwriting remains uncertain. GPT therefore preserves a cautious taxon statement rather than forcing a single normalized species name. The stable object identifier is B100190397.",
+      "fields": {
+        "catalogNumber": {
+          "value": "",
+          "confidence": 0.0,
+          "evidence_span": ""
+        },
+        "scientificName": {
+          "value": "Barleria sp.; possibly near B. splendens E.A. Bruce",
+          "confidence": 0.74,
+          "evidence_span": "Barleria sp. ... ? sp. nr. B. splendens E.A. Bruce"
+        },
+        "recordedBy": {
+          "value": "B. Verdcourt",
+          "confidence": 0.98,
+          "evidence_span": "Collector: B. Verdcourt"
+        },
+        "eventDate": {
+          "value": "1960-07-14",
+          "confidence": 0.99,
+          "evidence_span": "Date: 14.7.1960"
+        },
+        "country": {
+          "value": "Tanganyika",
+          "confidence": 0.96,
+          "evidence_span": "TANGANYIKA"
+        },
+        "stateProvince": {
+          "value": "Kigoma District",
+          "confidence": 0.9,
+          "evidence_span": "Kigoma Distr."
+        },
+        "decimalLatitude": {
+          "value": "",
+          "confidence": 0.0,
+          "evidence_span": ""
+        },
+        "decimalLongitude": {
+          "value": "",
+          "confidence": 0.0,
+          "evidence_span": ""
+        },
+        "typeStatus": {
+          "value": "",
+          "confidence": 0.0,
+          "evidence_span": ""
+        }
+      },
+      "normalized_key": "b100190397",
+      "eval10_order": 5
+    },
+    {
+      "catalog_reference": "L.2714152",
+      "display_identifier": "L.2714152",
+      "input_mode": "hespi_primary_label_crop",
+      "primary_label_available": true,
+      "gpt_full_transcription": "Herb. Lugd. Bat.\n\nAlstonia polyphylla Miq. [crossed / revised label]\n\nRevised for the\nFLORA MALESIANA\ndet. 1976 by Markgraf.\n\nBangka",
+      "gpt_analysis": "This crop is a revision label rather than the original collecting label. GPT records the visible revision text and Bangka locality, but leaves collector and event date empty because the crop does not support them.",
+      "fields": {
+        "catalogNumber": {
+          "value": "",
+          "confidence": 0.0,
+          "evidence_span": ""
+        },
+        "scientificName": {
+          "value": "Alstonia polyphylla Miq.",
+          "confidence": 0.91,
+          "evidence_span": "Alstonia polyphylla Miq."
+        },
+        "recordedBy": {
+          "value": "",
+          "confidence": 0.0,
+          "evidence_span": ""
+        },
+        "eventDate": {
+          "value": "",
+          "confidence": 0.0,
+          "evidence_span": ""
+        },
+        "country": {
+          "value": "",
+          "confidence": 0.0,
+          "evidence_span": ""
+        },
+        "stateProvince": {
+          "value": "Bangka",
+          "confidence": 0.94,
+          "evidence_span": "Bangka"
+        },
+        "decimalLatitude": {
+          "value": "",
+          "confidence": 0.0,
+          "evidence_span": ""
+        },
+        "decimalLongitude": {
+          "value": "",
+          "confidence": 0.0,
+          "evidence_span": ""
+        },
+        "typeStatus": {
+          "value": "",
+          "confidence": 0.0,
+          "evidence_span": ""
+        }
+      },
+      "normalized_key": "l2714152",
+      "eval10_order": 6
+    },
+    {
+      "catalog_reference": "K000237156",
+      "display_identifier": "K000237156",
+      "input_mode": "hespi_primary_label_crop",
+      "primary_label_available": true,
+      "gpt_full_transcription": "10,000—1/32\nSingapore Field No. 25570\n\nDISTRIBUTED FROM\nTHE BOTANIC GARDENS, SINGAPORE\n\nBorneo\nMALAY PENINSULA [printed line crossed / replaced]\n\nName: Tectaria Holttumii n. sp.\nLocality: B. N. Borneo: near Mount Kinabalu\nAltitude: 3000'\nDate: 19 / 11 / 31\nDet.: C. Christensen\nColl.: R. E. Holttum\n\nType Number.\nHERB. KEW.",
+      "gpt_analysis": "The crop contains a Singapore-distributed field label from Borneo and a visible type-number annotation. GPT recovered the collector, date, locality, field number, and type-status evidence.",
+      "fields": {
+        "catalogNumber": {
+          "value": "",
+          "confidence": 0.0,
+          "evidence_span": ""
+        },
+        "scientificName": {
+          "value": "Tectaria holttumii n. sp.",
+          "confidence": 0.96,
+          "evidence_span": "Tectaria Holttumii n. sp."
+        },
+        "recordedBy": {
+          "value": "R. E. Holttum",
+          "confidence": 0.98,
+          "evidence_span": "Coll. R. E. Holttum"
+        },
+        "eventDate": {
+          "value": "1931-11-19",
+          "confidence": 0.99,
+          "evidence_span": "Date 19 / 11 / 31"
+        },
+        "country": {
+          "value": "Borneo",
+          "confidence": 0.88,
+          "evidence_span": "Borneo"
+        },
+        "stateProvince": {
+          "value": "B. N. Borneo",
+          "confidence": 0.9,
+          "evidence_span": "B. N. Borneo, near Mount Kinabalu"
+        },
+        "decimalLatitude": {
+          "value": "",
+          "confidence": 0.0,
+          "evidence_span": ""
+        },
+        "decimalLongitude": {
+          "value": "",
+          "confidence": 0.0,
+          "evidence_span": ""
+        },
+        "typeStatus": {
+          "value": "Type Number",
+          "confidence": 0.97,
+          "evidence_span": "Type Number. HERB. KEW."
+        }
+      },
+      "normalized_key": "k000237156",
+      "eval10_order": 7
+    },
+    {
+      "catalog_reference": "BM000625315",
+      "display_identifier": "BM000625315",
+      "input_mode": "hespi_primary_label_crop_low_resolution",
+      "primary_label_available": true,
+      "gpt_full_transcription": "HERB.\nH. [herbarium owner name unclear]\n\n[unclear leading number] Cephalanthera rubra Rich.\ncoll.: EM Day.\nLoc.: Staverton Wd nr [unclear]\nAug 1920",
+      "gpt_analysis": "The detected crop is low resolution. GPT recovered the taxon, collector, and month-year, but leaves the locality unnormalized because the line is not reliable enough.",
+      "fields": {
+        "catalogNumber": {
+          "value": "",
+          "confidence": 0.0,
+          "evidence_span": ""
+        },
+        "scientificName": {
+          "value": "Cephalanthera rubra Rich.",
+          "confidence": 0.86,
+          "evidence_span": "Cephalanthera rubra Rich"
+        },
+        "recordedBy": {
+          "value": "E. M. Day",
+          "confidence": 0.88,
+          "evidence_span": "coll: EM Day"
+        },
+        "eventDate": {
+          "value": "1920-08",
+          "confidence": 0.9,
+          "evidence_span": "Aug 1920"
+        },
+        "country": {
+          "value": "",
+          "confidence": 0.0,
+          "evidence_span": ""
+        },
+        "stateProvince": {
+          "value": "",
+          "confidence": 0.0,
+          "evidence_span": ""
+        },
+        "decimalLatitude": {
+          "value": "",
+          "confidence": 0.0,
+          "evidence_span": ""
+        },
+        "decimalLongitude": {
+          "value": "",
+          "confidence": 0.0,
+          "evidence_span": ""
+        },
+        "typeStatus": {
+          "value": "",
+          "confidence": 0.0,
+          "evidence_span": ""
+        }
+      },
+      "normalized_key": "bm000625315",
+      "eval10_order": 8
+    },
+    {
+      "catalog_reference": "TU351001",
+      "display_identifier": "TU351001",
+      "input_mode": "hespi_primary_label_crop",
+      "primary_label_available": true,
+      "gpt_full_transcription": "TU351001\n\nPlantae Estonicae\n\nSuguk.: Gramineae\nTaime nimi: Anthoxanthum odoratum L.\n            lõhnav maarjahein\nLeiukoht: Haapsalu raj.; Laelatu\nKasvuk.: puisniidul\n25.07.1976\nNo. 30\nleg. / det.: E. Adov",
+      "gpt_analysis": "The Estonian label is readable. GPT recovered the taxon, locality, date, number, and collector. The country value is inferred from the visible Plantae Estonicae heading.",
+      "fields": {
+        "catalogNumber": {
+          "value": "TU351001",
+          "confidence": 0.72,
+          "evidence_span": "TU351001"
+        },
+        "scientificName": {
+          "value": "Anthoxanthum odoratum L.",
+          "confidence": 0.99,
+          "evidence_span": "Anthoxanthum odoratum L."
+        },
+        "recordedBy": {
+          "value": "E. Adov",
+          "confidence": 0.93,
+          "evidence_span": "E. Adov"
+        },
+        "eventDate": {
+          "value": "1976-07-25",
+          "confidence": 0.99,
+          "evidence_span": "25.07.1976"
+        },
+        "country": {
+          "value": "Estonia",
+          "confidence": 0.8,
+          "evidence_span": "Plantae Estonicae"
+        },
+        "stateProvince": {
+          "value": "Haapsalu raj.",
+          "confidence": 0.9,
+          "evidence_span": "Haapsalu raj.; Laelatu"
+        },
+        "decimalLatitude": {
+          "value": "",
+          "confidence": 0.0,
+          "evidence_span": ""
+        },
+        "decimalLongitude": {
+          "value": "",
+          "confidence": 0.0,
+          "evidence_span": ""
+        },
+        "typeStatus": {
+          "value": "",
+          "confidence": 0.0,
+          "evidence_span": ""
+        }
+      },
+      "normalized_key": "tu351001",
+      "eval10_order": 9
+    },
+    {
+      "catalog_reference": "TU303780",
+      "display_identifier": "TU303780",
+      "input_mode": "hespi_primary_label_crop",
+      "primary_label_available": true,
+      "gpt_full_transcription": "Plantae Estonicae\n\nSuguk.: Cyperaceae\nTaime nimi: Carex nigra\n            Harilik tarn\nLeiukoht: Põlva raj.; Taevaskoja, [unclear] vesiniidul\nKasvuk.: Ahja jõe luhas (sängiserva luht)\n27. juuni 1971\nNo.: [blank]\nleg. / det.: Lea Voosalu",
+      "gpt_analysis": "The Estonian label is readable. GPT recovered the taxon, locality, habitat, date, and collector. The catalogue number is left empty because it is not visible in the reviewed crop.",
+      "fields": {
+        "catalogNumber": {
+          "value": "",
+          "confidence": 0.0,
+          "evidence_span": ""
+        },
+        "scientificName": {
+          "value": "Carex nigra",
+          "confidence": 0.99,
+          "evidence_span": "Carex nigra"
+        },
+        "recordedBy": {
+          "value": "Lea Voosalu",
+          "confidence": 0.96,
+          "evidence_span": "Lea Voosalu"
+        },
+        "eventDate": {
+          "value": "1971-06-27",
+          "confidence": 0.98,
+          "evidence_span": "27 juuni 1971"
+        },
+        "country": {
+          "value": "Estonia",
+          "confidence": 0.8,
+          "evidence_span": "Plantae Estonicae"
+        },
+        "stateProvince": {
+          "value": "Põlva raj.",
+          "confidence": 0.88,
+          "evidence_span": "Põlva raj."
+        },
+        "decimalLatitude": {
+          "value": "",
+          "confidence": 0.0,
+          "evidence_span": ""
+        },
+        "decimalLongitude": {
+          "value": "",
+          "confidence": 0.0,
+          "evidence_span": ""
+        },
+        "typeStatus": {
+          "value": "",
+          "confidence": 0.0,
+          "evidence_span": ""
+        }
+      },
+      "normalized_key": "tu303780",
+      "eval10_order": 10
+    }
+  ]
+}

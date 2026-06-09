@@ -30,8 +30,7 @@ from herbarium_scribe.schema import EXTRACTION_FIELDS, flatten_record, validate_
 APP_BUNDLE = ROOT / "app_data" / "real_eval_100_streamlit_bundle.zip"
 HESPI_V10_REPORT = ROOT / "app_data" / "hespi_v10_ocr_visual_report.zip"
 HESPI_REPORT_DIR = "hespi_v10_ocr_visual_report"
-QWEN_VISION_REPORT = ROOT / "app_data" / "hespi_v11_qwen_streamlit_bundle.zip"
-QWEN_VISION_DIR = "hespi_v11_qwen_streamlit_bundle"
+GPT_PRIMARY_LABEL_JSON = ROOT / "app_data" / "gpt_primary_label_reviews_eval10.json"
 LOCAL_PROCESSED = ROOT / "data" / "processed"
 LOCAL_LLM = ROOT / "data" / "interim" / "llm"
 THUMB_PREFIX = "app_data/thumbnails/real_eval_100"
@@ -149,7 +148,12 @@ def hespi_display_record(path: str, catalog_number: str, detail: pd.DataFrame) -
     crops = hespi_crop_members(path, catalog_number)
 
     with st.container(border=True):
-        st.subheader(catalog_number)
+        review = gpt_primary_label_review(catalog_number)
+        display_identifier = clean(review.get("display_identifier")) if review else ""
+        if display_identifier and display_identifier != catalog_number:
+            st.subheader(f"{catalog_number} · {display_identifier}")
+        else:
+            st.subheader(catalog_number)
         occurrence_ids = [clean(value) for value in rows["occurrenceID"].drop_duplicates().tolist() if clean(value)]
         if occurrence_ids:
             st.caption(occurrence_ids[0])
@@ -189,6 +193,8 @@ def hespi_display_record(path: str, catalog_number: str, detail: pd.DataFrame) -
         visible = [column for column in columns if column in rows.columns]
         st.dataframe(rows[visible], use_container_width=True, hide_index=True)
 
+        display_gpt_primary_label_review(rows, catalog_number)
+
         if crops:
             with st.expander(f"OCR-focused crop images ({len(crops)})", expanded=False):
                 st.caption("Crop images are shown without enlargement to preserve readable edges and handwriting strokes.")
@@ -210,6 +216,18 @@ def show_hespi_v10_home(report_zip: Path) -> None:
         st.error(f"Missing report bundle: {report_zip}")
         st.info("Upload app_data/hespi_v10_ocr_visual_report.zip to display the Hespi v10 results.")
         return
+
+    gpt_summary = gpt_primary_label_dataset_summary(GPT_PRIMARY_LABEL_JSON)
+    if gpt_summary:
+        st.info(
+            f"GPT review source: {clean(gpt_summary.get('dataset_title')) or 'GPT primary-label reviews'} "
+            f"({clean(gpt_summary.get('record_count')) or '0'} records)."
+        )
+    else:
+        st.warning(
+            f"GPT review JSON not found: {GPT_PRIMARY_LABEL_JSON}. "
+            "The existing Hespi v10 content is still shown, but the GPT comparison section will be empty."
+        )
 
     detail = hespi_read_csv(str(report_zip), "ocr_focus_detail.csv")
     records = hespi_record_order(detail, str(report_zip))
@@ -240,188 +258,149 @@ def show_hespi_v10_home(report_zip: Path) -> None:
     hespi_display_summary_tables(str(report_zip))
 
 
+
+
 # -----------------------------------------------------------------------------
-# Qwen primary-label vision comparison
+# GPT primary-label image reviews added to the existing Hespi v10 page
 # -----------------------------------------------------------------------------
+
+GPT_PRIMARY_LABEL_FIELDS = [
+    "catalogNumber",
+    "scientificName",
+    "recordedBy",
+    "eventDate",
+    "country",
+    "stateProvince",
+    "decimalLatitude",
+    "decimalLongitude",
+    "typeStatus",
+]
+
 
 @st.cache_data(show_spinner=False)
-def qwen_read_csv(path: str, filename: str) -> pd.DataFrame:
-    member = f"{QWEN_VISION_DIR}/{filename}"
-    with zipfile.ZipFile(path) as zf:
-        with zf.open(member) as handle:
-            return pd.read_csv(handle, dtype=str).fillna("")
+def load_gpt_primary_label_reviews(path: str) -> dict[str, dict[str, Any]]:
+    file_path = Path(path)
+    if not file_path.exists():
+        return {}
+    payload = json.loads(file_path.read_text(encoding="utf-8"))
+    records = payload.get("records", []) if isinstance(payload, dict) else []
+    mapping: dict[str, dict[str, Any]] = {}
+    for record in records:
+        if not isinstance(record, dict):
+            continue
+        key = clean(record.get("normalized_key")) or hespi_normalise_identifier(clean(record.get("catalog_reference")))
+        if key:
+            mapping[key] = record
+    return mapping
 
 
-@st.cache_data(show_spinner=False)
-def qwen_read_jsonl(path: str, filename: str) -> list[dict[str, Any]]:
-    member = f"{QWEN_VISION_DIR}/{filename}"
-    with zipfile.ZipFile(path) as zf:
-        text = zf.read(member).decode("utf-8")
-    return [json.loads(line) for line in text.splitlines() if line.strip()]
+def gpt_primary_label_dataset_summary(path: Path) -> dict[str, Any]:
+    if not path.exists():
+        return {}
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    return payload if isinstance(payload, dict) else {}
 
 
-def qwen_output_index(rows: list[dict[str, Any]]) -> dict[str, dict[str, Any]]:
-    return {clean(row.get("occurrenceID")): row for row in rows}
+def gpt_primary_label_review(catalog_number: str) -> dict[str, Any]:
+    reviews = load_gpt_primary_label_reviews(str(GPT_PRIMARY_LABEL_JSON))
+    return reviews.get(hespi_normalise_identifier(catalog_number), {})
 
 
-def qwen_normalized_contains(needle: str, haystack: str) -> bool:
-    normalized_needle = re.sub(r"[^a-z0-9]+", "", clean(needle).lower())
-    normalized_haystack = re.sub(r"[^a-z0-9]+", "", clean(haystack).lower())
-    return bool(normalized_needle) and normalized_needle in normalized_haystack
+def hespi_unique_value(rows: pd.DataFrame, column: str) -> str:
+    if column not in rows.columns:
+        return ""
+    values: list[str] = []
+    for value in rows[column].tolist():
+        cleaned = clean(value)
+        if cleaned and cleaned not in values:
+            values.append(cleaned)
+    return " | ".join(values)
 
 
-def qwen_field_table(output: dict[str, Any], detail: pd.DataFrame) -> pd.DataFrame:
-    parsed = output.get("parsed_json") or {}
-    fields = parsed.get("fields", {}) if isinstance(parsed, dict) else {}
-    transcription = clean(parsed.get("full_transcription")) if isinstance(parsed, dict) else ""
-    rows = []
-    for field in EXTRACTION_FIELDS:
+def gpt_hespi_comparison_table(rows: pd.DataFrame, review: dict[str, Any]) -> pd.DataFrame:
+    hespi_columns = {
+        "catalogNumber": "final_catalogNumber",
+        "recordedBy": "final_recordedBy",
+        "eventDate": "final_eventDate",
+    }
+    output = []
+    fields = review.get("fields", {}) if review else {}
+    for field in GPT_PRIMARY_LABEL_FIELDS:
         item = fields.get(field, {}) if isinstance(fields, dict) else {}
-        if not isinstance(item, dict):
-            item = {"value": item}
-        match = detail[detail["field"] == field] if not detail.empty else pd.DataFrame()
-        value = clean(item.get("value"))
-        evidence = clean(item.get("evidence_span"))
-        confidence = clean(item.get("confidence"))
-        evidence_found = not value or qwen_normalized_contains(evidence or value, transcription)
-        rows.append({
+        gpt_value = clean(item.get("value")) if isinstance(item, dict) else ""
+        evidence = clean(item.get("evidence_span")) if isinstance(item, dict) else ""
+        confidence = clean(item.get("confidence")) if isinstance(item, dict) else ""
+        hespi_column = hespi_columns.get(field, "")
+        hespi_value = hespi_unique_value(rows, hespi_column) if hespi_column else ""
+        if not hespi_column:
+            comparison_note = "The v10 visual report does not expose a final Hespi value for this field."
+        elif hespi_value and gpt_value and hespi_value == gpt_value:
+            comparison_note = "Hespi and GPT agree exactly."
+        elif hespi_value and gpt_value:
+            comparison_note = "Hespi and GPT differ; review the visible evidence and OCR / HTR rows."
+        elif hespi_value:
+            comparison_note = "Hespi returned a value; GPT left the field empty because the reviewed image did not provide reliable visible evidence."
+        elif gpt_value:
+            comparison_note = "GPT returned a value from visible image evidence; the current Hespi summary is empty for this field."
+        else:
+            comparison_note = "Both outputs are empty."
+        output.append({
             "field": field,
-            "gold": clean(match.iloc[0].get("gold")) if not match.empty else "",
-            "Qwen value": value,
-            "confidence": confidence,
-            "evidence": evidence,
-            "evidence in transcription": evidence_found,
-            "exact match": clean(match.iloc[0].get("exact_match")) if not match.empty else "",
-            "token F1": clean(match.iloc[0].get("token_f1")) if not match.empty else "",
+            "existing Hespi final result": hespi_value,
+            "GPT primary-label result": gpt_value,
+            "GPT confidence": confidence,
+            "GPT visible evidence": evidence,
+            "comparison note": comparison_note,
         })
-    return pd.DataFrame(rows)
+    return pd.DataFrame(output)
 
 
-def show_qwen_vision_comparison(report_zip: Path) -> None:
-    st.title("Qwen Primary-Label Vision")
+def display_gpt_primary_label_review(rows: pd.DataFrame, catalog_number: str) -> None:
+    review = gpt_primary_label_review(catalog_number)
+    st.markdown("**GPT primary-label image review**")
     st.caption(
-        "Automatically cropped primary labels sent directly to Qwen-VL. "
-        "The complete visual transcription is preserved before field extraction."
+        "This is a manually reviewed GPT multimodal transcription stored in the ten-image JSON review file. "
+        "It is displayed alongside the existing Hespi v10 output and does not replace the Hespi pipeline results."
     )
-    if not report_zip.exists():
-        st.info(
-            "The Qwen eval10 workflow is ready, but its result bundle has not been added yet. "
-            "Run “Hespi v11 eval10 Qwen primary-label vision” and add the generated "
-            "hespi_v11_qwen_streamlit_bundle.zip to app_data."
-        )
+    if not review:
+        st.info("No GPT primary-label review entry is available for this record in app_data/gpt_primary_label_reviews_eval10.json.")
         return
 
-    manifest = qwen_read_csv(str(report_zip), "primary_label_manifest.csv")
-    detail = qwen_read_csv(str(report_zip), "qwen_primary_label_evaluation_detail.csv")
-    summary = qwen_read_csv(str(report_zip), "qwen_primary_label_evaluation_summary.csv")
-    outputs = qwen_read_jsonl(str(report_zip), "qwen_vision_outputs.jsonl")
-    output_by_id = qwen_output_index(outputs)
-    record_ids = [clean(value) for value in manifest["occurrenceID"].drop_duplicates() if clean(value)]
-    parsed_count = sum(row.get("status") == "parsed" for row in outputs)
-    evidence_risks = 0
-    for occurrence_id in record_ids:
-        output = output_by_id.get(occurrence_id, {})
-        record_detail = detail[detail["occurrenceID"] == occurrence_id]
-        table = qwen_field_table(output, record_detail)
-        evidence_risks += int((table["Qwen value"].ne("") & ~table["evidence in transcription"]).sum())
+    if not bool(review.get("primary_label_available", False)):
+        st.warning(
+            "Hespi did not detect a primary-label crop for this record. "
+            "The GPT review uses a clearly marked whole-sheet fallback image."
+        )
 
-    metrics = st.columns(4)
-    metrics[0].metric("Records with primary label", len(record_ids))
-    metrics[1].metric("Parsed Qwen outputs", parsed_count)
-    metrics[2].metric("Evidence mismatches", evidence_risks)
-    actual_models = sorted({
-        clean(row.get("actual_model"))
-        for row in outputs
-        if clean(row.get("actual_model"))
-    })
-    metrics[3].metric("Actual model", ", ".join(actual_models) or "unknown")
-
-    st.subheader("Field-level comparison")
-    st.caption(
-        "The two evidence-proxy columns measure whether gold values appear in a transcription; "
-        "they are not OCR CER/WER."
+    overview = pd.DataFrame([{
+        "display identifier": clean(review.get("display_identifier")),
+        "GPT input mode": clean(review.get("input_mode")),
+        "GPT full transcription": clean(review.get("gpt_full_transcription")),
+        "GPT analysis": clean(review.get("gpt_analysis")),
+    }])
+    st.dataframe(
+        overview,
+        use_container_width=True,
+        hide_index=True,
+        column_config={
+            "GPT full transcription": st.column_config.TextColumn(width="large"),
+            "GPT analysis": st.column_config.TextColumn(width="large"),
+        },
     )
-    st.dataframe(summary, use_container_width=True, hide_index=True)
 
-    selected = st.selectbox(
-        "Record",
-        record_ids,
-        format_func=lambda occurrence_id: (
-            clean(manifest[manifest["occurrenceID"] == occurrence_id].iloc[0].get("catalogNumber"))
-            or occurrence_id
-        ),
+    with st.expander("Readable GPT full transcription", expanded=False):
+        st.code(clean(review.get("gpt_full_transcription")), language=None)
+
+    st.markdown("**Existing Hespi final values vs GPT primary-label values**")
+    st.dataframe(
+        gpt_hespi_comparison_table(rows, review),
+        use_container_width=True,
+        hide_index=True,
+        column_config={
+            "GPT visible evidence": st.column_config.TextColumn(width="large"),
+            "comparison note": st.column_config.TextColumn(width="large"),
+        },
     )
-    crop_rows = manifest[manifest["occurrenceID"] == selected].sort_values("image_index")
-    output = output_by_id.get(selected, {})
-    parsed = output.get("parsed_json") or {}
-    record_detail = detail[detail["occurrenceID"] == selected]
-
-    st.divider()
-    image_col, transcript_col = st.columns([0.9, 1.1])
-    with image_col:
-        st.subheader("1. Primary-label crop")
-        with zipfile.ZipFile(report_zip) as zf:
-            for _, crop in crop_rows.iterrows():
-                member = f"{QWEN_VISION_DIR}/{clean(crop.get('bundle_crop_path'))}"
-                image_bytes = zf.read(member)
-                image = Image.open(io.BytesIO(image_bytes))
-                st.image(
-                    image,
-                    caption=f"Crop {clean(crop.get('image_index'))} · {image.width} × {image.height}",
-                    use_container_width=True,
-                )
-                st.caption(
-                    f"Detection confidence: {clean(crop.get('layout_confidence')) or 'unknown'}"
-                )
-    with transcript_col:
-        st.subheader("2. Complete visual transcription")
-        if output.get("error_message"):
-            st.warning(clean(output.get("error_message")))
-        transcription = clean(parsed.get("full_transcription")) if isinstance(parsed, dict) else ""
-        st.text_area(
-            "Qwen transcription",
-            transcription,
-            height=310,
-            label_visibility="collapsed",
-        )
-        transcriptions = parsed.get("transcriptions", []) if isinstance(parsed, dict) else []
-        uncertain = [
-            clean(span)
-            for item in transcriptions
-            if isinstance(item, dict)
-            for span in item.get("uncertain_spans", [])
-            if clean(span)
-        ]
-        if uncertain:
-            st.warning("Uncertain visual readings: " + " · ".join(uncertain))
-        with st.expander("Tesseract on the same crop", expanded=True):
-            for _, crop in crop_rows.iterrows():
-                st.markdown(f"**Crop {clean(crop.get('image_index'))}**")
-                st.code(clean(crop.get("tesseract_text")) or "(empty)", language="text")
-
-    st.subheader("3. Direct multimodal field extraction")
-    field_table = qwen_field_table(output, record_detail)
-    risky = field_table[
-        field_table["Qwen value"].ne("")
-        & ~field_table["evidence in transcription"]
-    ]
-    if len(risky):
-        st.error(
-            "Potential extraction bug: one or more values are not present in Qwen's own transcription. "
-            "Treat them as unsupported."
-        )
-    st.dataframe(field_table, use_container_width=True, hide_index=True)
-
-    with st.expander("Raw Qwen response and diagnostics", expanded=False):
-        diagnostic_cols = st.columns(4)
-        diagnostic_cols[0].metric("Status", clean(output.get("status")) or "missing")
-        diagnostic_cols[1].metric("Raw chars", clean(output.get("raw_output_length")) or "0")
-        diagnostic_cols[2].metric("Finish reason", clean(output.get("finish_reason")) or "unknown")
-        diagnostic_cols[3].metric(
-            "Tokens",
-            clean((output.get("usage") or {}).get("total_tokens")) or "unknown",
-        )
-        st.code(clean(output.get("raw_output")), language="json")
 
 
 # -----------------------------------------------------------------------------
@@ -1020,22 +999,11 @@ def main() -> None:
     st.sidebar.caption(f"Data: {data['source']}")
     page = st.sidebar.radio(
         "View",
-        [
-            "Hespi v10 Results",
-            "Qwen Vision Comparison",
-            "Pipeline Review",
-            "Image Gallery",
-            "Overview",
-            "Record Explorer",
-            "LLM/RAG Trace",
-            "Live Upload",
-        ],
+        ["Hespi v10 Results", "Pipeline Review", "Image Gallery", "Overview", "Record Explorer", "LLM/RAG Trace", "Live Upload"],
         key="page",
     )
     if page == "Hespi v10 Results":
         show_hespi_v10_home(HESPI_V10_REPORT)
-    elif page == "Qwen Vision Comparison":
-        show_qwen_vision_comparison(QWEN_VISION_REPORT)
     elif page == "Overview":
         show_overview(data)
     elif page == "Pipeline Review":
