@@ -2,8 +2,9 @@ import hashlib
 import json
 
 import pandas as pd
+import pytest
 
-from herbarium_scribe.pipeline import _parse_llm_json, stage_extract
+from herbarium_scribe.pipeline import _parse_llm_json, require_htr_evidence, stage_extract
 
 
 def test_parse_llm_json_accepts_wrapped_fields():
@@ -130,3 +131,50 @@ evaluation:
     assert llm["not_evaluated_reason"] == "empty_ocr_evidence"
     raw = (data_dir / "interim" / "llm" / "gate_outputs.jsonl").read_text(encoding="utf-8")
     assert '"llm_call_attempted": false' in raw
+
+
+def test_required_htr_gate_stops_before_llm_when_all_outputs_are_empty():
+    ocr = pd.DataFrame([
+        {
+            "occurrenceID": "eval:1",
+            "ocr_engine": "hespi_trocr_small",
+            "ocr_status": "model_load_error:AttributeError:missing tokenizer",
+            "ocr_text": "",
+        },
+        {
+            "occurrenceID": "demo:1",
+            "ocr_engine": "hespi_trocr_small",
+            "ocr_status": "ok",
+            "ocr_text": "demo text must not satisfy the EVAL gate",
+        },
+    ])
+    config = {
+        "ocr": {
+            "handwriting_recognition": {
+                "enabled": True,
+                "require_nonempty": True,
+            }
+        }
+    }
+
+    with pytest.raises(RuntimeError, match="1 EVAL HTR attempts, 0 non-empty outputs"):
+        require_htr_evidence(ocr, {"eval:1"}, config)
+
+
+def test_required_htr_gate_accepts_nonempty_eval_output():
+    ocr = pd.DataFrame([{
+        "occurrenceID": "eval:1",
+        "ocr_engine": "hespi_trocr_small",
+        "ocr_status": "ok",
+        "ocr_text": "R. E. Holttum",
+    }])
+    config = {
+        "ocr": {
+            "handwriting_recognition": {
+                "enabled": True,
+                "require_nonempty": True,
+            }
+        }
+    }
+
+    require_htr_evidence(ocr, {"eval:1"}, config)

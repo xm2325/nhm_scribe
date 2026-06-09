@@ -15,6 +15,7 @@ layout:
 ocr:
   handwriting_recognition:
     enabled: true
+    require_nonempty: true
     model_size: small
     region_types:
       - collector

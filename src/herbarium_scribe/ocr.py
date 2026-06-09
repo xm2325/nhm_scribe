@@ -17,6 +17,12 @@ _TROCR_ENGINES: dict[str, Any] = {}
 _TROCR_LOAD_ERRORS: dict[str, str] = {}
 
 
+def _exception_status(prefix: str, exc: Exception) -> str:
+    message = re.sub(r"\s+", " ", str(exc)).strip()
+    detail = f"{type(exc).__name__}:{message}" if message else type(exc).__name__
+    return f"{prefix}:{detail[:500]}"
+
+
 def _catalog_candidate_key(value: str) -> str:
     return re.sub(r"[^A-Za-z0-9]+", "", clean_str(value)).upper()
 
@@ -293,25 +299,28 @@ def ocr_image_hespi_trocr(
     if not image_path or not Path(image_path).exists():
         return "", "missing_image", 0.0
     try:
-        from hespi.ocr import TrOCR
+        from hespi.ocr import TrOCR, TrOCRSize
     except Exception as exc:
-        return "", f"unavailable:{type(exc).__name__}", time.monotonic() - started
+        return "", _exception_status("unavailable", exc), time.monotonic() - started
     try:
         if model_size in _TROCR_LOAD_ERRORS:
             return "", _TROCR_LOAD_ERRORS[model_size], time.monotonic() - started
         engine = _TROCR_ENGINES.get(model_size)
         if engine is None:
             try:
-                engine = TrOCR(size=model_size)
+                size = TrOCRSize(model_size.lower())
+                engine = TrOCR(size=size)
             except Exception as exc:
-                status = f"model_load_error:{type(exc).__name__}"
+                status = _exception_status("model_load_error", exc)
+                logger.exception("Unable to load TrOCR model size=%s", model_size)
                 _TROCR_LOAD_ERRORS[model_size] = status
                 return "", status, time.monotonic() - started
             _TROCR_ENGINES[model_size] = engine
         text = clean_str(engine.get_text(Path(image_path)))
         return text, "ok" if text else "empty_output", time.monotonic() - started
     except Exception as exc:
-        return "", f"error:{type(exc).__name__}", time.monotonic() - started
+        logger.exception("TrOCR inference failed for %s", image_path)
+        return "", _exception_status("error", exc), time.monotonic() - started
 
 
 def _htr_region_ids(

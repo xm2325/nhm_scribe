@@ -150,6 +150,38 @@ def stage_ocr(config_path: str | Path) -> pd.DataFrame:
     return ocr
 
 
+def require_htr_evidence(
+    ocr_df: pd.DataFrame,
+    eval_occurrence_ids: set[str],
+    config: dict[str, Any],
+) -> None:
+    htr_cfg = config.get("ocr", {}).get("handwriting_recognition", {})
+    if not htr_cfg.get("enabled", False) or not htr_cfg.get("require_nonempty", False):
+        return
+    htr = ocr_df[
+        ocr_df.get("ocr_engine", pd.Series(index=ocr_df.index, dtype=str))
+        .astype(str)
+        .str.startswith("hespi_trocr_")
+    ].copy()
+    if eval_occurrence_ids:
+        htr = htr[htr["occurrenceID"].astype(str).isin(eval_occurrence_ids)]
+    nonempty = htr.get("ocr_text", pd.Series(index=htr.index, dtype=str)).astype(str).str.strip().ne("")
+    if len(htr) and nonempty.any():
+        return
+    statuses = sorted(
+        {
+            clean_str(value)
+            for value in htr.get("ocr_status", pd.Series(dtype=str)).tolist()
+            if clean_str(value)
+        }
+    )
+    detail = "; ".join(statuses[:5]) if statuses else "no HTR rows"
+    raise RuntimeError(
+        "HTR evidence gate failed before LLM extraction: "
+        f"{len(htr)} EVAL HTR attempts, 0 non-empty outputs; {detail}"
+    )
+
+
 FIELD_ALIASES = {
     "catalog_number": "catalogNumber",
     "catalog_no": "catalogNumber",
@@ -577,6 +609,11 @@ def run_pipeline(config_path: str | Path) -> dict[str, Any]:
     stage_download(config_path)
     stage_layout(config_path)
     ocr_df = stage_ocr(config_path)
+    require_htr_evidence(
+        ocr_df,
+        set(eval_df["occurrenceID"].astype(str)),
+        cfg,
+    )
     stage_extract(config_path)
     pred = stage_reconcile(config_path)
     detail, summary, strat = stage_evaluate(config_path)
