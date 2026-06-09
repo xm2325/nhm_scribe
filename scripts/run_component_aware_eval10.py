@@ -48,6 +48,28 @@ def write_jsonl(path: Path, rows: list[dict[str, Any]]) -> None:
             handle.write(json.dumps(row, ensure_ascii=False) + "\n")
 
 
+def write_runtime_checkpoints(
+    processed: Path,
+    retrieval_rows: list[dict[str, Any]],
+    predictions: list[dict[str, Any]],
+    reconciled_jsonl: list[dict[str, Any]],
+    llm_diagnostics: list[dict[str, Any]],
+) -> None:
+    pd.DataFrame(retrieval_rows).to_csv(
+        processed / "rag_retrieval_results.csv",
+        index=False,
+    )
+    pd.DataFrame(predictions).to_csv(
+        processed / "reconciled_predictions_flat.csv",
+        index=False,
+    )
+    write_jsonl(processed / "reconciled_predictions.jsonl", reconciled_jsonl)
+    pd.DataFrame(llm_diagnostics).to_csv(
+        processed / "llm_diagnostics.csv",
+        index=False,
+    )
+
+
 def add_whole_sheet_components(
     components: pd.DataFrame,
     eval_df: pd.DataFrame,
@@ -319,8 +341,10 @@ def main() -> None:
     cfg, paths = load_runtime(args.config)
     processed = paths["processed"]
 
+    print("[component-aware] preparing frozen metadata and images", flush=True)
     demo, eval_df, _ = stage_metadata(args.config)
     manifest = stage_download(args.config)
+    print("[component-aware] running full-sheet component detection", flush=True)
     stage_layout(args.config)
     raw_components = pd.read_csv(
         processed / "hespi_sheet_components.csv",
@@ -335,6 +359,11 @@ def main() -> None:
     readings.to_csv(processed / "component_readings.csv", index=False)
     packets = build_evidence_packets(components, readings)
     write_jsonl(processed / "evidence_packets.jsonl", packets)
+    print(
+        f"[component-aware] detected {len(components)} components and saved "
+        f"{len(readings)} readings",
+        flush=True,
+    )
 
     reference_manifest, references = build_reference_manifest(
         demo,
@@ -373,8 +402,13 @@ def main() -> None:
     predictions = []
     reconciled_jsonl = []
     llm_diagnostics: list[dict[str, Any]] = []
-    for _, gold_row in eval_df.iterrows():
+    for record_index, (_, gold_row) in enumerate(eval_df.iterrows(), start=1):
         occurrence_id = clean_str(gold_row.get("occurrenceID"))
+        print(
+            f"[component-aware] reconciling record {record_index}/{len(eval_df)}: "
+            f"{occurrence_id}",
+            flush=True,
+        )
         packet = packet_by_occurrence.get(occurrence_id, {
             "occurrenceID": occurrence_id,
             "catalogNumber_gold": "",
@@ -465,13 +499,23 @@ def main() -> None:
                 "raw_output_length": len(clean_str(meta.get("raw_output"))),
                 "visual_index_status": visual_status,
             })
+        write_runtime_checkpoints(
+            processed,
+            retrieval_rows,
+            predictions,
+            reconciled_jsonl,
+            llm_diagnostics,
+        )
 
     retrieval = pd.DataFrame(retrieval_rows)
-    retrieval.to_csv(processed / "rag_retrieval_results.csv", index=False)
     predictions_frame = pd.DataFrame(predictions)
-    predictions_frame.to_csv(processed / "reconciled_predictions_flat.csv", index=False)
-    write_jsonl(processed / "reconciled_predictions.jsonl", reconciled_jsonl)
-    pd.DataFrame(llm_diagnostics).to_csv(processed / "llm_diagnostics.csv", index=False)
+    write_runtime_checkpoints(
+        processed,
+        retrieval_rows,
+        predictions,
+        reconciled_jsonl,
+        llm_diagnostics,
+    )
 
     diagnostics = pd.read_csv(processed / "hespi_layout_diagnostics.csv", dtype=str).fillna("")
     detail, field_comparison, branch_comparison = evaluate_predictions(

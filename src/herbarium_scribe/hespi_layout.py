@@ -220,13 +220,16 @@ def detect_components_with_tiled_fallback(
     tile_dir.mkdir(parents=True, exist_ok=True)
     for index, window in enumerate(tile_windows(image.width, image.height, tile_size, tile_overlap)):
         tile_path = tile_dir / f"tile_{index:03d}.jpg"
-        image.crop(tuple(window)).save(tile_path)
-        local, _ = _predict(
-            model,
-            tile_path,
-            min(resolution, max(tile_size, 64)),
-            float(tile_confidence if tile_confidence is not None else confidence),
-        )
+        try:
+            image.crop(tuple(window)).save(tile_path)
+            local, _ = _predict(
+                model,
+                tile_path,
+                min(resolution, max(tile_size, 64)),
+                float(tile_confidence if tile_confidence is not None else confidence),
+            )
+        finally:
+            tile_path.unlink(missing_ok=True)
         for item in local:
             tile_detections.append({
                 **item,
@@ -238,6 +241,10 @@ def detect_components_with_tiled_fallback(
                 "detection_source": "tiled_fallback",
                 "tile_window": window,
             })
+    try:
+        tile_dir.rmdir()
+    except OSError:
+        pass
     combined = [
         {**item, "detection_source": item.get("detection_source", "full_sheet")}
         for item in detections
