@@ -31,6 +31,8 @@ APP_BUNDLE = ROOT / "app_data" / "real_eval_100_streamlit_bundle.zip"
 HESPI_V10_REPORT = ROOT / "app_data" / "hespi_v10_ocr_visual_report.zip"
 HESPI_REPORT_DIR = "hespi_v10_ocr_visual_report"
 GPT_PRIMARY_LABEL_JSON = ROOT / "app_data" / "gpt_primary_label_reviews_eval10.json"
+QWEN_PRIMARY_LABEL_BUNDLE = ROOT / "app_data" / "hespi_v11_qwen_streamlit_bundle.zip"
+QWEN_BUNDLE_ROOT = "hespi_v11_qwen_streamlit_bundle"
 LOCAL_PROCESSED = ROOT / "data" / "processed"
 LOCAL_LLM = ROOT / "data" / "interim" / "llm"
 THUMB_PREFIX = "app_data/thumbnails/real_eval_100"
@@ -401,6 +403,198 @@ def display_gpt_primary_label_review(rows: pd.DataFrame, catalog_number: str) ->
             "comparison note": st.column_config.TextColumn(width="large"),
         },
     )
+
+
+# -----------------------------------------------------------------------------
+# Primary-label multimodal comparison
+# -----------------------------------------------------------------------------
+
+@st.cache_data(show_spinner=False)
+def qwen_bundle_names(path: str) -> list[str]:
+    if not Path(path).exists():
+        return []
+    with zipfile.ZipFile(path) as zf:
+        return zf.namelist()
+
+
+@st.cache_data(show_spinner=False)
+def qwen_bundle_csv(path: str, filename: str) -> pd.DataFrame:
+    member = f"{QWEN_BUNDLE_ROOT}/{filename}"
+    with zipfile.ZipFile(path) as zf:
+        with zf.open(member) as fh:
+            try:
+                return pd.read_csv(fh, dtype=str).fillna("")
+            except pd.errors.EmptyDataError:
+                return pd.DataFrame()
+
+
+@st.cache_data(show_spinner=False)
+def qwen_bundle_json(path: str, filename: str) -> dict[str, Any]:
+    member = f"{QWEN_BUNDLE_ROOT}/{filename}"
+    with zipfile.ZipFile(path) as zf:
+        return json.loads(zf.read(member).decode("utf-8"))
+
+
+@st.cache_data(show_spinner=False)
+def qwen_bundle_jsonl(path: str, filename: str) -> list[dict[str, Any]]:
+    member = f"{QWEN_BUNDLE_ROOT}/{filename}"
+    with zipfile.ZipFile(path) as zf:
+        text = zf.read(member).decode("utf-8")
+    return [json.loads(line) for line in text.splitlines() if line.strip()]
+
+
+@st.cache_data(show_spinner=False)
+def qwen_bundle_bytes(path: str, member: str) -> bytes:
+    with zipfile.ZipFile(path) as zf:
+        return zf.read(member)
+
+
+def qwen_field_item(parsed: dict[str, Any], field: str) -> dict[str, Any]:
+    fields = parsed.get("fields", {}) if isinstance(parsed, dict) else {}
+    item = fields.get(field, {}) if isinstance(fields, dict) else {}
+    return item if isinstance(item, dict) else {}
+
+
+def primary_label_field_comparison(
+    catalog_number: str,
+    occurrence_id: str,
+    output: dict[str, Any],
+    evaluation: pd.DataFrame,
+) -> pd.DataFrame:
+    parsed = output.get("parsed_json") or {}
+    gpt_review = gpt_primary_label_review(catalog_number)
+    gpt_fields = gpt_review.get("fields", {}) if isinstance(gpt_review, dict) else {}
+    eval_rows = (
+        evaluation[evaluation["occurrenceID"].astype(str) == occurrence_id]
+        if not evaluation.empty and "occurrenceID" in evaluation.columns
+        else pd.DataFrame()
+    )
+    rows = []
+    for field in GPT_PRIMARY_LABEL_FIELDS:
+        gpt_item = gpt_fields.get(field, {}) if isinstance(gpt_fields, dict) else {}
+        qwen_item = qwen_field_item(parsed, field)
+        gold_rows = eval_rows[eval_rows["field"].astype(str) == field] if not eval_rows.empty else eval_rows
+        gold = clean(gold_rows.iloc[0].get("gold")) if len(gold_rows) else ""
+        rows.append({
+            "field": field,
+            "gold metadata": gold,
+            "GPT reviewed value": clean(gpt_item.get("value")) if isinstance(gpt_item, dict) else "",
+            "Qwen automatic value": clean(qwen_item.get("value")),
+            "Qwen confidence": clean(qwen_item.get("confidence")),
+            "Qwen visible evidence": clean(qwen_item.get("evidence_span")),
+        })
+    return pd.DataFrame(rows)
+
+
+def show_primary_label_vision() -> None:
+    st.title("Primary Label Vision")
+    st.caption("One crop, two reading paths, and a field-level evidence check.")
+
+    if not QWEN_PRIMARY_LABEL_BUNDLE.exists():
+        st.error(f"Missing Qwen result bundle: {QWEN_PRIMARY_LABEL_BUNDLE}")
+        st.info(
+            "Download hespi_v11_qwen_streamlit_bundle.zip from the Qwen GitHub Actions artifact "
+            "and place it in app_data."
+        )
+        return
+
+    path = str(QWEN_PRIMARY_LABEL_BUNDLE)
+    manifest = qwen_bundle_csv(path, "primary_label_manifest.csv")
+    evaluation = qwen_bundle_csv(path, "qwen_primary_label_evaluation_detail.csv")
+    evaluation_summary = qwen_bundle_csv(path, "qwen_primary_label_evaluation_summary.csv")
+    outputs = qwen_bundle_jsonl(path, "qwen_vision_outputs.jsonl")
+    output_by_id = {clean(row.get("occurrenceID")): row for row in outputs}
+    model_probe = qwen_bundle_json(path, "qwen_model_probe.json")
+    text_preflight = qwen_bundle_json(path, "qwen_text_chat_preflight.json")
+    vision_preflight = qwen_bundle_json(path, "qwen_vision_preflight.json")
+
+    parsed_count = sum(row.get("status") == "parsed" for row in outputs)
+    eligible_count = manifest["occurrenceID"].nunique()
+    cols = st.columns(3)
+    cols[0].metric("Primary-label records", eligible_count)
+    cols[1].metric("Qwen parsed", parsed_count)
+    cols[2].metric("Parse success", f"{parsed_count / eligible_count:.0%}" if eligible_count else "0%")
+    st.caption(
+        f"Requested model: {clean(vision_preflight.get('requested_model')) or 'unknown'} · "
+        f"Actual model: {clean(vision_preflight.get('actual_model')) or 'unavailable'}"
+    )
+    with st.expander("Eval10 catalogue-agreement summary", expanded=False):
+        st.caption(
+            "These metrics compare visible-label extraction with current catalogue metadata. "
+            "They are not direct visual transcription accuracy."
+        )
+        st.dataframe(evaluation_summary, width="stretch", hide_index=True)
+
+    record_rows = manifest[["catalogNumber", "occurrenceID"]].drop_duplicates()
+    labels = [
+        f"{clean(row.catalogNumber)} · {clean(row.occurrenceID)}"
+        for row in record_rows.itertuples(index=False)
+    ]
+    selected = st.selectbox("Record", labels)
+    selected_index = labels.index(selected)
+    selected_row = record_rows.iloc[selected_index]
+    catalog_number = clean(selected_row["catalogNumber"])
+    occurrence_id = clean(selected_row["occurrenceID"])
+    crops = manifest[manifest["occurrenceID"].astype(str) == occurrence_id].copy()
+    output = output_by_id.get(occurrence_id, {})
+    parsed = output.get("parsed_json") or {}
+    gpt_review = gpt_primary_label_review(catalog_number)
+
+    st.subheader("1. Automatic primary-label crop")
+    image_columns = st.columns(max(1, min(2, len(crops))))
+    for index, (_, crop) in enumerate(crops.iterrows()):
+        member = f"{QWEN_BUNDLE_ROOT}/{clean(crop.get('bundle_crop_path'))}"
+        with image_columns[index % len(image_columns)]:
+            st.image(
+                qwen_bundle_bytes(path, member),
+                caption=f"{clean(crop.get('region_id'))} · layout confidence {clean(crop.get('layout_confidence'))}",
+                use_container_width=True,
+            )
+
+    st.subheader("2. Text recovered from the same crop")
+    tesseract_col, multimodal_col = st.columns(2)
+    with tesseract_col:
+        st.markdown("**Tesseract**")
+        tesseract_text = "\n\n".join(clean(value) for value in crops["tesseract_text"] if clean(value))
+        st.text_area("Tesseract transcription", tesseract_text, height=320, disabled=True)
+    with multimodal_col:
+        st.markdown("**Qwen automatic multimodal transcription**")
+        qwen_text = clean(parsed.get("full_transcription")) if isinstance(parsed, dict) else ""
+        st.text_area("Qwen transcription", qwen_text, height=320, disabled=True)
+        if not qwen_text:
+            error = clean(output.get("error_message"))
+            st.warning(error or f"Qwen status: {clean(output.get('status')) or 'missing'}")
+
+    if gpt_review:
+        with st.expander("GPT manually reviewed multimodal transcription", expanded=False):
+            st.code(clean(gpt_review.get("gpt_full_transcription")), language=None)
+
+    st.subheader("3. Structured fields and visible evidence")
+    st.caption(
+        "A Qwen value may correctly reflect the historical label while differing from current catalogue metadata."
+    )
+    st.dataframe(
+        primary_label_field_comparison(catalog_number, occurrence_id, output, evaluation),
+        use_container_width=True,
+        hide_index=True,
+        column_config={
+            "Qwen visible evidence": st.column_config.TextColumn(width="large"),
+        },
+    )
+
+    with st.expander("Run diagnostics", expanded=False):
+        st.json({
+            "record_status": output.get("status"),
+            "record_error": output.get("error_message"),
+            "finish_reason": output.get("finish_reason"),
+            "usage": output.get("usage"),
+            "model_probe": model_probe,
+            "text_preflight": text_preflight,
+            "vision_preflight": vision_preflight,
+        }, expanded=False)
+        raw_output = clean(output.get("raw_output"))
+        if raw_output:
+            st.code(raw_output, language="json")
 
 
 # -----------------------------------------------------------------------------
@@ -999,11 +1193,22 @@ def main() -> None:
     st.sidebar.caption(f"Data: {data['source']}")
     page = st.sidebar.radio(
         "View",
-        ["Hespi v10 Results", "Pipeline Review", "Image Gallery", "Overview", "Record Explorer", "LLM/RAG Trace", "Live Upload"],
+        [
+            "Hespi v10 Results",
+            "Primary Label Vision",
+            "Pipeline Review",
+            "Image Gallery",
+            "Overview",
+            "Record Explorer",
+            "LLM/RAG Trace",
+            "Live Upload",
+        ],
         key="page",
     )
     if page == "Hespi v10 Results":
         show_hespi_v10_home(HESPI_V10_REPORT)
+    elif page == "Primary Label Vision":
+        show_primary_label_vision()
     elif page == "Overview":
         show_overview(data)
     elif page == "Pipeline Review":

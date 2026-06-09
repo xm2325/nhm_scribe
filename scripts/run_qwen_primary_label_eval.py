@@ -139,13 +139,18 @@ def write_report(
         f"- Vision preflight status: `{vision_preflight.get('status', 'not_attempted')}`\n",
         f"- Vision preflight actual model: `{vision_preflight.get('actual_model', '')}`\n",
         f"- Vision preflight error: `{vision_preflight.get('error_message', '')}`\n",
-        "\n## Overall result\n",
+        "\n## Catalogue metadata agreement\n",
         markdown_table(overall),
-        "\n\n## Field result\n",
+        "\n\n## Field-level catalogue metadata agreement\n",
         markdown_table(summary),
         "\n\n## Interpretation\n",
+        "- Exact match and token F1 compare image-derived fields with current catalogue metadata. "
+        "They are not direct measures of visual transcription accuracy because historical label names, "
+        "collector numbers, dates, and place names may differ from curated catalogue values.\n",
         "- `qwen_transcription_gold_proxy` and `tesseract_gold_proxy` only test whether gold field values "
         "appear in the respective transcription after normalization. They are not OCR CER/WER.\n",
+        "- `unsupported_prediction_rate` is only a self-consistency check against Qwen's own transcription. "
+        "It cannot detect text hallucinated in both the transcription and extracted field.\n",
         "- Qwen extraction metrics evaluate fields returned directly from the primary-label image. "
         "Values absent from the primary label should remain empty rather than be inferred from the full sheet.\n",
         "- A strong visual model can still hallucinate fluent text. Review raw transcription, uncertain spans, "

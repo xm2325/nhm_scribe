@@ -33,6 +33,8 @@ def test_primary_label_messages_keep_transcription_separate_from_fields(tmp_path
     content = messages[1]["content"]
     assert content[0]["type"] == "text"
     assert "transcribe every visible character" in content[0]["text"]
+    assert "never use a collector number" in content[0]["text"]
+    assert "the phrase 'Type Number' alone is not a type status" in content[0]["text"]
     assert any(item["type"] == "image_url" for item in content)
 
 

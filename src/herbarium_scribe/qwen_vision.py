@@ -54,7 +54,15 @@ def primary_label_vision_messages(
             "Read only visible text. First transcribe every visible character line by line, preserving "
             "spelling, punctuation, abbreviations, line breaks, and uncertain characters. Do not silently "
             "correct names or infer missing text. Then extract the requested herbarium fields only when the "
-            "value is supported by your transcription. Return one JSON object with this shape: "
+            "value is supported by your transcription. For catalogNumber, use only an institution accession "
+            "or barcode identifier; never use a collector number, field number, job number, telephone number, "
+            "or label print code. For recordedBy, use the specimen collector, not a determiner, donor, herbarium "
+            "owner, or reviser. For eventDate, use the collection date, not a determination, revision, donation, "
+            "or printing date. Set typeStatus only for an explicit status such as holotype, isotype, syntype, "
+            "lectotype, or neotype; the phrase 'Type Number' alone is not a type status. If several scientific "
+            "names are visible, preserve all of them in the transcription and extract the latest explicit "
+            "determination or revision without silently modernising its spelling. Return one JSON object with "
+            "this shape: "
             '{"transcriptions":[{"image_index":1,"text":"all visible text","uncertain_spans":["..."]}],'
             '"fields":{"catalogNumber":{"value":"","confidence":0.0,"evidence_span":""},'
             '"scientificName":{"value":"","confidence":0.0,"evidence_span":""},'

@@ -18,7 +18,33 @@ permissions:
   contents: read
 
 jobs:
+  api-preflight:
+    runs-on: ubuntu-latest
+    env:
+      QWEN_API_KEY: ${{ secrets.QWEN_API_KEY }}
+      QWEN_BASE_URL: https://ws-jta6lz3g3givn2ww.ap-southeast-1.maas.aliyuncs.com/compatible-mode/v1
+      QWEN_MODEL: ${{ inputs.qwen_model || 'qwen3.7-plus' }}
+    steps:
+      - name: Checkout repository anonymously
+        run: |
+          git init .
+          git remote add origin https://github.com/${{ github.repository }}.git
+          git fetch --depth=1 origin ${{ github.sha }}
+          git checkout --detach FETCH_HEAD
+
+      - name: Test models, text chat, and image input
+        run: python3 scripts/qwen_api_preflight.py
+
+      - name: Upload preflight diagnostics
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: qwen-api-preflight-${{ github.run_id }}
+          retention-days: 30
+          path: reports/qwen_api_preflight.json
+
   eval10:
+    needs: api-preflight
     runs-on: ubuntu-latest
     timeout-minutes: 180
     env:

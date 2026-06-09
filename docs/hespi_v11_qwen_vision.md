@@ -43,6 +43,10 @@ The model name is a workflow input and defaults to `qwen3.7-plus`. The workflow
 queries the workspace `/models` endpoint and saves the advertised model IDs so
 an unavailable deployment name can be diagnosed without exposing the key.
 
+Before installing Hespi or rebuilding the evaluation set, a lightweight job
+tests the models endpoint, text chat, and one real crop image from the committed
+Hespi v10 report. The full eval10 job runs only when all three checks succeed.
+
 ## Run
 
 Use **Actions -> Hespi v11 eval10 Qwen primary-label vision -> Run workflow**.
@@ -65,3 +69,15 @@ The artifact includes:
 
 Do not describe the evidence proxies as OCR CER or WER. They only test whether a
 gold metadata value appears in the transcription after normalization.
+
+The current successful run used `qwen3.7-plus`, parsed all nine records with a
+detected primary label, and is displayed from:
+
+```text
+app_data/hespi_v11_qwen_streamlit_bundle.zip
+```
+
+Catalogue exact match must not be treated as transcription accuracy. Current
+catalogue metadata can intentionally differ from the historical or revised name,
+collector notation, collection number, date format, and place name visible on
+the label.
