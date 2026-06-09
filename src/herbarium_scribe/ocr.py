@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import json
+import re
 import shutil
 import time
 from pathlib import Path
@@ -11,6 +13,177 @@ from .logging_utils import get_logger
 from .metadata import clean_str
 
 logger = get_logger(__name__)
+
+
+def _catalog_candidate_key(value: str) -> str:
+    return re.sub(r"[^A-Za-z0-9]+", "", clean_str(value)).upper()
+
+
+def _catalog_candidate_values(text: str) -> list[str]:
+    values = []
+    for line in str(text or "").splitlines():
+        value = re.sub(r"\s+", " ", clean_str(line)).strip(" .,:;|_-")
+        key = _catalog_candidate_key(value)
+        if not 5 <= len(key) <= 24:
+            continue
+        if not any(char.isdigit() for char in key):
+            continue
+        if value not in values:
+            values.append(value)
+    return values
+
+
+def rank_catalog_ocr_candidates(
+    readings: list[tuple[str, str]],
+    max_candidates: int = 8,
+) -> list[dict[str, Any]]:
+    grouped: dict[str, dict[str, Any]] = {}
+    for source, text in readings:
+        for value in _catalog_candidate_values(text):
+            key = _catalog_candidate_key(value)
+            item = grouped.setdefault(
+                key,
+                {
+                    "value": value,
+                    "normalised": key,
+                    "votes": 0,
+                    "sources": [],
+                },
+            )
+            item["votes"] += 1
+            if source not in item["sources"]:
+                item["sources"].append(source)
+            if len(value) < len(item["value"]):
+                item["value"] = value
+    ranked = []
+    for item in grouped.values():
+        key = item["normalised"]
+        pattern_score = 0
+        if any(char.isalpha() for char in key) and any(char.isdigit() for char in key):
+            pattern_score += 2
+        if 7 <= len(key) <= 16:
+            pattern_score += 1
+        if key[:1].isalpha():
+            pattern_score += 1
+        if key.isdigit():
+            pattern_score -= 2
+        item["score"] = item["votes"] * 10 + pattern_score
+        ranked.append(item)
+    ranked.sort(
+        key=lambda item: (
+            -int(item["score"]),
+            -int(item["votes"]),
+            str(item["normalised"]),
+        )
+    )
+    return ranked[:max(1, int(max_candidates))]
+
+
+def ocr_catalog_number_ensemble(
+    image_path: str,
+    *,
+    standard_text: str,
+    lang: str,
+    config: dict[str, Any],
+) -> tuple[str, list[dict[str, Any]], str, int, float]:
+    started = time.monotonic()
+    if not image_path or not Path(image_path).exists():
+        return standard_text, [], "missing_image", 0, 0.0
+    if shutil.which("tesseract") is None:
+        return standard_text, [], "tesseract_binary_missing", 0, time.monotonic() - started
+    try:
+        from PIL import Image, ImageEnhance, ImageFilter, ImageOps
+        import pytesseract
+    except Exception as exc:
+        return standard_text, [], f"unavailable:{type(exc).__name__}", 0, time.monotonic() - started
+
+    upscale_factor = max(1, int(config.get("upscale_factor", 4)))
+    psm_modes = [int(value) for value in config.get("psm_modes", [7, 13])]
+    whitelist = clean_str(
+        config.get("character_whitelist", "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789.-")
+    )
+    max_candidates = int(config.get("max_candidates", 8))
+    readings = [("standard", standard_text)]
+    attempts = 0
+    errors = []
+    try:
+        image = Image.open(image_path).convert("RGB")
+        resized = image.resize(
+            (image.width * upscale_factor, image.height * upscale_factor),
+            Image.Resampling.LANCZOS,
+        )
+        grey = ImageOps.grayscale(resized)
+        enhanced = ImageEnhance.Contrast(ImageOps.autocontrast(grey)).enhance(1.5)
+        enhanced = enhanced.filter(ImageFilter.SHARPEN)
+        variants = {
+            "upscaled": resized,
+            "autocontrast": enhanced,
+        }
+        for variant_name, variant in variants.items():
+            for psm in psm_modes:
+                attempts += 1
+                tesseract_config = f"--psm {psm}"
+                if whitelist:
+                    tesseract_config += f" -c tessedit_char_whitelist={whitelist}"
+                source = f"{variant_name}_psm{psm}"
+                try:
+                    text = pytesseract.image_to_string(
+                        variant,
+                        lang=lang,
+                        config=tesseract_config,
+                    )
+                    readings.append((source, clean_str(text)))
+                except Exception as exc:
+                    errors.append(f"{source}:{type(exc).__name__}")
+    except Exception as exc:
+        return standard_text, [], f"error:{type(exc).__name__}", attempts, time.monotonic() - started
+
+    candidates = rank_catalog_ocr_candidates(readings, max_candidates=max_candidates)
+    text = "\n".join(str(item["value"]) for item in candidates)
+    if not text:
+        text = standard_text
+    if candidates:
+        status = "ok"
+    elif errors and len(errors) == attempts:
+        status = "error:" + ",".join(errors)
+    elif errors:
+        status = "partial_error:" + ",".join(errors)
+    else:
+        status = "no_candidate"
+    return text, candidates, status, attempts, time.monotonic() - started
+
+
+def _catalog_ensemble_region_ids(
+    layout_df: pd.DataFrame,
+    config: dict[str, Any],
+) -> set[str]:
+    region_types = {
+        clean_str(value).lower()
+        for value in config.get("region_types", ["number", "barcode", "database_label"])
+    }
+    max_regions = max(1, int(config.get("max_regions_per_record", 3)))
+    if layout_df.empty or "region_id" not in layout_df.columns:
+        return set()
+    candidates = layout_df.copy()
+    region_series = candidates.get(
+        "region_type",
+        pd.Series("", index=candidates.index, dtype=str),
+    ).astype(str).str.lower()
+    candidates = candidates[region_series.isin(region_types)].copy()
+    if candidates.empty:
+        return set()
+    candidates["_confidence"] = pd.to_numeric(
+        candidates.get("layout_confidence", pd.Series("", index=candidates.index)),
+        errors="coerce",
+    ).fillna(-1.0)
+    candidates["_order"] = range(len(candidates))
+    candidates = candidates.sort_values(
+        ["occurrenceID", "_confidence", "_order"],
+        ascending=[True, False, True],
+        kind="stable",
+    )
+    selected = candidates.groupby("occurrenceID", sort=False).head(max_regions)
+    return set(selected["region_id"].astype(str))
 
 
 def decode_barcodes(
@@ -115,6 +288,13 @@ def run_ocr(layout_df: pd.DataFrame, cfg: dict[str, Any], paths: dict[str, Path]
     backend = resolve_ocr_backend(ocfg.get("backend", "tesseract"))
     allow_fixture = bool(ocfg.get("allow_fixture_text", True))
     include_region_labels = bool(ocfg.get("include_region_labels_in_prompt", False))
+    ensemble_cfg = ocfg.get("catalog_number_ensemble", {})
+    ensemble_enabled = backend == "tesseract" and bool(ensemble_cfg.get("enabled", False))
+    ensemble_region_ids = (
+        _catalog_ensemble_region_ids(layout_df, ensemble_cfg)
+        if ensemble_enabled
+        else set()
+    )
     rows = []
     for _, row in layout_df.iterrows():
         crop_path = clean_str(row.get("crop_path", ""))
@@ -141,6 +321,27 @@ def run_ocr(layout_df: pd.DataFrame, cfg: dict[str, Any], paths: dict[str, Path]
                 lang=ocfg.get("tesseract_lang", "eng"),
                 config=tesseract_config,
             )
+        ensemble_used = False
+        ensemble_candidates: list[dict[str, Any]] = []
+        ensemble_attempts = 0
+        ensemble_elapsed = 0.0
+        if clean_str(row.get("region_id")) in ensemble_region_ids:
+            (
+                ensemble_text,
+                ensemble_candidates,
+                ensemble_status,
+                ensemble_attempts,
+                ensemble_elapsed,
+            ) = ocr_catalog_number_ensemble(
+                crop_path,
+                standard_text=text,
+                lang=ocfg.get("tesseract_lang", "eng"),
+                config=ensemble_cfg,
+            )
+            text = ensemble_text
+            status = f"{status};ensemble_{ensemble_status}"
+            engine_used = "tesseract_catalog_number_ensemble"
+            ensemble_used = True
         if not text and allow_fixture and fixture_text:
             text = fixture_text
             engine_used = f"fixture_text_after_{engine_used}"
@@ -154,7 +355,15 @@ def run_ocr(layout_df: pd.DataFrame, cfg: dict[str, Any], paths: dict[str, Path]
             error_message = status
         region_type = clean_str(row.get("region_type", row.get("region_label", "label")))
         prompt_header = clean_str(row.get("prompt_header", ""))
-        if prompt_header and text:
+        if ensemble_used and text:
+            prompt_header = (
+                "FIELD=catalog_number; SOURCE=tesseract_crop_ensemble; "
+                f"candidate_count={len(ensemble_candidates)}; "
+                f"ambiguous={'true' if len(ensemble_candidates) > 1 else 'false'}; "
+                "ranked_hypotheses=true"
+            )
+            prompt_text = f"[{prompt_header}]\n{text}"
+        elif prompt_header and text:
             prompt_text = f"[{prompt_header}]\n{text}"
         else:
             prompt_text = f"[{region_type}]\n{text}" if include_region_labels and text else text
@@ -181,6 +390,12 @@ def run_ocr(layout_df: pd.DataFrame, cfg: dict[str, Any], paths: dict[str, Path]
             "barcode_count": "",
             "barcode_ambiguous": "",
             "barcode_elapsed_seconds": "",
+            "ocr_ensemble_used": ensemble_used,
+            "ocr_ensemble_candidate_count": len(ensemble_candidates),
+            "ocr_ensemble_ambiguous": len(ensemble_candidates) > 1,
+            "ocr_ensemble_candidates_json": json.dumps(ensemble_candidates, ensure_ascii=False),
+            "ocr_ensemble_attempts": ensemble_attempts,
+            "ocr_ensemble_elapsed_seconds": round(ensemble_elapsed, 3),
         })
     barcode_cfg = ocfg.get("barcode_decoder", {})
     if bool(barcode_cfg.get("enabled", False)):
@@ -230,6 +445,12 @@ def run_ocr(layout_df: pd.DataFrame, cfg: dict[str, Any], paths: dict[str, Path]
                 "barcode_count": len(values),
                 "barcode_ambiguous": len(values) > 1,
                 "barcode_elapsed_seconds": round(elapsed, 3),
+                "ocr_ensemble_used": False,
+                "ocr_ensemble_candidate_count": "",
+                "ocr_ensemble_ambiguous": "",
+                "ocr_ensemble_candidates_json": "",
+                "ocr_ensemble_attempts": "",
+                "ocr_ensemble_elapsed_seconds": "",
             })
     out = pd.DataFrame(rows)
     out.to_csv(paths["processed"] / "ocr_by_region.csv", index=False)

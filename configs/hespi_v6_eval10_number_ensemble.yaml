@@ -1,0 +1,33 @@
+extends: configs/hespi_v5_eval10_barcode_gbif.yaml
+method_name: deepseek_v4_pro_nonthinking_barcode_gbif_number_ensemble
+paths:
+  data_dir: data/experiments/hespi_v6_eval10
+  reports_dir: reports/hespi_v6_eval10
+experiment:
+  title: "Hespi v6 Eval10: Catalog Number OCR Ensemble"
+ocr:
+  catalog_number_ensemble:
+    enabled: true
+    region_types:
+      - number
+      - barcode
+      - database_label
+    max_regions_per_record: 3
+    upscale_factor: 4
+    psm_modes:
+      - 7
+      - 13
+    character_whitelist: "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789.-"
+    max_candidates: 8
+reconciliation:
+  gbif_methods:
+    - deepseek_v4_pro_nonthinking_barcode_gbif_number_ensemble
+  gbif_cache_path: data/experiments/hespi_v6_eval10/processed/gbif_match_cache.json
+outputs:
+  prefix: hespi_v6_eval10
+  prediction_name: deepseek_number_ensemble
+  llm_artifact_family: hespi_v6_eval10
+  llm_outputs_name: hespi_v6_eval10_outputs.jsonl
+  llm_diagnostics_name: hespi_v6_eval10_diagnostics.csv
+  llm_diagnostics_json_name: hespi_v6_eval10_diagnostics.json
+  report_name: hespi_v6_eval10_report.md

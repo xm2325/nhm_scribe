@@ -276,6 +276,7 @@ def evaluate_predictions(
     gold = gold_df.set_index("occurrenceID")
     ocr_text = ocr_df.groupby("occurrenceID")["ocr_text"].apply("\n".join).to_dict() if len(ocr_df) else {}
     barcode_candidates: dict[str, list[str]] = {}
+    catalog_ocr_candidates: dict[str, list[str]] = {}
     if len(ocr_df) and "ocr_engine" in ocr_df.columns:
         barcode_rows = ocr_df[ocr_df["ocr_engine"].astype(str).eq("zxingcpp")]
         for occurrence_id, group in barcode_rows.groupby("occurrenceID"):
@@ -286,6 +287,17 @@ def evaluate_predictions(
                     if value and value not in values:
                         values.append(value)
             barcode_candidates[str(occurrence_id)] = values
+        ensemble_rows = ocr_df[
+            ocr_df["ocr_engine"].astype(str).eq("tesseract_catalog_number_ensemble")
+        ]
+        for occurrence_id, group in ensemble_rows.groupby("occurrenceID"):
+            values = []
+            for text in group["ocr_text"].astype(str):
+                for value in text.splitlines():
+                    value = clean_str(value)
+                    if value and value not in values:
+                        values.append(value)
+            catalog_ocr_candidates[str(occurrence_id)] = values
     proxy_rows = []
     for occ, grow in gold.iterrows():
         vals = []
@@ -336,6 +348,7 @@ def evaluate_predictions(
                 review_config=review_config,
             )
             record_barcode_candidates = barcode_candidates.get(str(occ), [])
+            record_catalog_ocr_candidates = catalog_ocr_candidates.get(str(occ), [])
             if predicted and field == "catalogNumber" and record_barcode_candidates:
                 normalised_prediction = normalize_field_value(field, pred_val)
                 normalised_candidates = {
@@ -358,6 +371,32 @@ def evaluate_predictions(
                             [
                                 value
                                 for value in [review_reasons, *barcode_reasons]
+                                if value
+                            ]
+                        )
+                    )
+            if predicted and field == "catalogNumber" and record_catalog_ocr_candidates:
+                normalised_prediction = normalize_field_value(field, pred_val)
+                normalised_candidates = {
+                    normalize_field_value(field, value)
+                    for value in record_catalog_ocr_candidates
+                }
+                ensemble_reasons = []
+                ensemble_priority = "medium"
+                if len(normalised_candidates) > 1:
+                    ensemble_reasons.append("multiple_catalog_ocr_hypotheses")
+                if normalised_prediction not in normalised_candidates:
+                    ensemble_reasons.append("catalog_mismatch_ocr_ensemble")
+                    ensemble_priority = "high"
+                if ensemble_reasons:
+                    review_required = True
+                    if review_priority != "high":
+                        review_priority = ensemble_priority
+                    review_reasons = ";".join(
+                        dict.fromkeys(
+                            [
+                                value
+                                for value in [review_reasons, *ensemble_reasons]
                                 if value
                             ]
                         )
@@ -385,6 +424,16 @@ def evaluate_predictions(
                 "prediction_confidence": confidence,
                 "barcode_candidates": " | ".join(record_barcode_candidates) if field == "catalogNumber" else "",
                 "barcode_candidate_count": len(record_barcode_candidates) if field == "catalogNumber" else np.nan,
+                "catalog_ocr_candidates": (
+                    " | ".join(record_catalog_ocr_candidates)
+                    if field == "catalogNumber"
+                    else ""
+                ),
+                "catalog_ocr_candidate_count": (
+                    len(record_catalog_ocr_candidates)
+                    if field == "catalogNumber"
+                    else np.nan
+                ),
                 "review_required": int(review_required) if predicted else np.nan,
                 "review_priority": review_priority,
                 "review_reasons": review_reasons,

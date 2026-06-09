@@ -179,6 +179,39 @@ def test_catalog_mismatch_with_single_decoded_barcode_requires_review(tmp_path):
     assert "catalog_mismatch_single_decoded_barcode" in row["review_reasons"]
 
 
+def test_multiple_catalog_ocr_hypotheses_require_review(tmp_path):
+    predictions = pd.DataFrame([{
+        "occurrenceID": "eval:1",
+        "method": "llm",
+        "catalogNumber": "BM000625315",
+        "catalogNumber_confidence": 0.95,
+        "catalogNumber_evidence_span": "BM000625315",
+        "parse_failure": False,
+    }])
+    gold = pd.DataFrame([{
+        "occurrenceID": "eval:1",
+        "catalogNumber": "BM000625315",
+    }])
+    ocr = pd.DataFrame([{
+        "occurrenceID": "eval:1",
+        "ocr_engine": "tesseract_catalog_number_ensemble",
+        "ocr_text": "BM000625315\nBM0006253",
+    }])
+
+    detail, _, _ = evaluate_predictions(
+        predictions,
+        gold,
+        ocr,
+        ["catalogNumber"],
+        {"processed": tmp_path},
+    )
+
+    row = detail.iloc[0]
+    assert row["catalog_ocr_candidate_count"] == 2
+    assert row["review_required"] == 1
+    assert "multiple_catalog_ocr_hypotheses" in row["review_reasons"]
+
+
 def test_rag_delta_reports_no_rag_only(tmp_path):
     processed = tmp_path / "processed"
     processed.mkdir()
