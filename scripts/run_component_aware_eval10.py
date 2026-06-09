@@ -627,6 +627,19 @@ def main() -> None:
                 "record": record,
                 "status": clean_str(meta.get("llm_status")),
                 "not_evaluated_reason": clean_str(meta.get("not_evaluated_reason")),
+                "backend": clean_str(
+                    meta.get("backend", cfg.get("llm", {}).get("backend"))
+                ),
+                "requested_model": clean_str(meta.get("requested_model")),
+                "actual_model": clean_str(meta.get("actual_model")),
+                "retrieved_reference_occurrenceIDs": [
+                    clean_str(item.get("reference_occurrenceID"))
+                    for item in context
+                ],
+                "raw_output": clean_str(meta.get("raw_output")),
+                "finish_reason": clean_str(meta.get("finish_reason")),
+                "usage": meta.get("usage", {}),
+                "error_message": clean_str(meta.get("error_message")),
             })
             llm_diagnostics.append({
                 "occurrenceID": occurrence_id,
@@ -637,6 +650,10 @@ def main() -> None:
                 "llm_status": clean_str(meta.get("llm_status")),
                 "not_evaluated_reason": clean_str(meta.get("not_evaluated_reason")),
                 "raw_output_length": len(clean_str(meta.get("raw_output"))),
+                "finish_reason": clean_str(meta.get("finish_reason")),
+                "endpoint_reachable": meta.get("endpoint_reachable", False),
+                "api_key_present": meta.get("api_key_present", False),
+                "error_message": clean_str(meta.get("error_message")),
                 "visual_index_status": visual_status,
             })
         write_runtime_checkpoints(
