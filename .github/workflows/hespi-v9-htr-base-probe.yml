@@ -47,7 +47,7 @@ jobs:
           python -m pip install -e '.[dev,hespi]'
 
       - name: Run tests
-        run: pytest
+        run: python -m pytest
 
       - name: Build validated shared image set
         run: python scripts/prepare_hespi_v2_paired_eval.py
