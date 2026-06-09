@@ -100,9 +100,25 @@ def hespi_crop_members(path: str, catalog_number: str) -> list[str]:
     return sorted(members)
 
 
-def hespi_render_image(path: str, member: str, caption: str | None = None) -> None:
-    image = Image.open(io.BytesIO(hespi_read_bytes(path, member)))
-    st.image(image, caption=caption, use_container_width=True)
+def hespi_render_image(
+    path: str,
+    member: str,
+    caption: str | None = None,
+    max_width: int | None = None,
+) -> tuple[bytes, tuple[int, int]]:
+    """Render a report image without enlarging it beyond its native resolution.
+
+    Stretching a small OCR crop or overview across a wide Streamlit column makes
+    the image look blurred.  This helper caps the displayed width at the native
+    width while still allowing large overview images to be reduced to a useful
+    browser size.
+    """
+    image_bytes = hespi_read_bytes(path, member)
+    image = Image.open(io.BytesIO(image_bytes))
+    native_width, native_height = image.size
+    display_width = native_width if max_width is None else min(native_width, max_width)
+    st.image(image, caption=caption, width=display_width)
+    return image_bytes, (native_width, native_height)
 
 
 def hespi_record_order(detail: pd.DataFrame, path: str) -> list[str]:
@@ -136,36 +152,49 @@ def hespi_display_record(path: str, catalog_number: str, detail: pd.DataFrame) -
         if occurrence_ids:
             st.caption(occurrence_ids[0])
 
-        image_col, table_col = st.columns([0.9, 1.6])
-        with image_col:
-            if overview:
-                hespi_render_image(path, overview, "Annotated overview")
-            else:
-                st.info("No annotated overview thumbnail is available for this record.")
-        with table_col:
-            columns = [
-                "region_type",
-                "ocr_engine",
-                "ocr_text",
-                "ocr_status",
-                "htr_prompt_accepted",
-                "htr_prompt_reason",
-                "gold_recordedBy",
-                "gold_eventDate",
-                "final_recordedBy",
-                "final_eventDate",
-                "final_catalogNumber",
-            ]
-            visible = [column for column in columns if column in rows.columns]
-            st.dataframe(rows[visible], use_container_width=True, hide_index=True)
+        if overview:
+            overview_bytes, (native_width, native_height) = hespi_render_image(
+                path, overview, "Annotated overview", max_width=1200
+            )
+            st.caption(
+                f"Displayed at no more than native resolution. "
+                f"Annotated overview size: {native_width} × {native_height} pixels."
+            )
+            st.download_button(
+                "Download full-resolution annotated overview",
+                data=overview_bytes,
+                file_name=Path(overview).name,
+                mime="image/jpeg",
+                key=f"download-overview-{hespi_normalise_identifier(catalog_number)}",
+            )
+        else:
+            st.info("No annotated overview thumbnail is available for this record.")
+
+        st.markdown("**OCR / HTR and extraction detail**")
+        columns = [
+            "region_type",
+            "ocr_engine",
+            "ocr_text",
+            "ocr_status",
+            "htr_prompt_accepted",
+            "htr_prompt_reason",
+            "gold_recordedBy",
+            "gold_eventDate",
+            "final_recordedBy",
+            "final_eventDate",
+            "final_catalogNumber",
+        ]
+        visible = [column for column in columns if column in rows.columns]
+        st.dataframe(rows[visible], use_container_width=True, hide_index=True)
 
         if crops:
             with st.expander(f"OCR-focused crop images ({len(crops)})", expanded=False):
-                for start in range(0, len(crops), 4):
-                    cols = st.columns(4)
-                    for col, member in zip(cols, crops[start : start + 4]):
+                st.caption("Crop images are shown without enlargement to preserve readable edges and handwriting strokes.")
+                for start in range(0, len(crops), 3):
+                    cols = st.columns(3)
+                    for col, member in zip(cols, crops[start : start + 3]):
                         with col:
-                            hespi_render_image(path, member, Path(member).name)
+                            hespi_render_image(path, member, Path(member).name, max_width=360)
 
 
 def show_hespi_v10_home(report_zip: Path) -> None:
@@ -184,6 +213,17 @@ def show_hespi_v10_home(report_zip: Path) -> None:
     records = hespi_record_order(detail, str(report_zip))
     with_thumbnail = sum(bool(hespi_find_overview_member(str(report_zip), record)) for record in records)
 
+    st.header("Record-level visual review")
+    st.caption(
+        "Records with annotated overview images are shown first. "
+        "The record without an overview image is placed at the end. "
+        "Images are not enlarged beyond their native resolution."
+    )
+    for record in records:
+        hespi_display_record(str(report_zip), record, detail)
+
+    st.divider()
+    st.header("Herbarium SCRIBE overall results")
     cols = st.columns(4)
     cols[0].metric("EVAL records", len(records))
     cols[1].metric("Annotated overviews", with_thumbnail)
@@ -193,14 +233,9 @@ def show_hespi_v10_home(report_zip: Path) -> None:
     contact_sheet = f"{HESPI_REPORT_DIR}/contact_sheet.jpg"
     if contact_sheet in hespi_zip_names(str(report_zip)):
         with st.expander("Contact sheet", expanded=True):
-            hespi_render_image(str(report_zip), contact_sheet, "Hespi v10 OCR visual report")
+            hespi_render_image(str(report_zip), contact_sheet, "Hespi v10 OCR visual report", max_width=780)
 
     hespi_display_summary_tables(str(report_zip))
-
-    st.subheader("Record-level visual review")
-    st.caption("Records with annotated overview thumbnails are shown first. Records without thumbnails are placed at the end.")
-    for record in records:
-        hespi_display_record(str(report_zip), record, detail)
 
 
 # -----------------------------------------------------------------------------
