@@ -283,6 +283,14 @@ def evaluate_predictions(
             "review_required_rate": float(
                 branch_detail["review_required"].mean() if len(branch_detail) else 0
             ),
+            "not_evaluated_rate": float(
+                branch_predictions["status"].eq("not_evaluated").mean()
+                if len(branch_predictions) else 0
+            ),
+            "parse_failure_rate": float(
+                branch_predictions["status"].eq("parse_failure").mean()
+                if len(branch_predictions) else 0
+            ),
         }
         for field in ["catalogNumber", "scientificName", "recordedBy", "eventDate"]:
             subset = branch_detail[branch_detail["field"] == field]

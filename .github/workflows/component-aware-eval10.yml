@@ -23,6 +23,7 @@ jobs:
       QWEN_API_KEY: ${{ secrets.QWEN_API_KEY }}
       QWEN_BASE_URL: https://ws-jta6lz3g3givn2ww.ap-southeast-1.maas.aliyuncs.com/compatible-mode/v1
       QWEN_MODEL: qwen3.7-plus
+      QWEN_MIN_INTERVAL_SECONDS: "1.0"
       HF_HUB_DISABLE_XET: "1"
     steps:
       - uses: actions/checkout@v5
