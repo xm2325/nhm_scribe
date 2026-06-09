@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Any
 
 import pandas as pd
+import numpy as np
 from PIL import Image
 
 from herbarium_scribe.component_aware import (
@@ -41,6 +42,15 @@ BRANCHES = [
     "component_aware_no_rag",
     "component_aware_with_rag",
 ]
+TEXT_BEARING_COMPONENTS = {
+    "primary_specimen_label",
+    "annotation_label",
+    "database_label",
+    "barcode",
+    "number",
+    "type_label",
+    "stamp",
+}
 
 
 def write_jsonl(path: Path, rows: list[dict[str, Any]]) -> None:
@@ -69,6 +79,44 @@ def write_runtime_checkpoints(
         processed / "llm_diagnostics.csv",
         index=False,
     )
+
+
+def normalized_mean_embedding(vectors: list[np.ndarray]) -> np.ndarray | None:
+    valid = [
+        np.asarray(vector, dtype=np.float32)
+        for vector in vectors
+        if vector is not None and np.asarray(vector).size
+    ]
+    if not valid:
+        return None
+    mean = np.mean(np.stack(valid), axis=0).astype(np.float32)
+    norm = float(np.linalg.norm(mean))
+    return mean / norm if norm else mean
+
+
+def component_crop_paths(
+    components: pd.DataFrame,
+    occurrence_id: str,
+    *,
+    limit: int,
+) -> list[str]:
+    rows = components[
+        components["occurrenceID"].astype(str).eq(occurrence_id)
+        & components["component_type"].astype(str).isin(TEXT_BEARING_COMPONENTS)
+    ].copy()
+    rows["_detector_confidence"] = pd.to_numeric(
+        rows.get("detector_confidence", pd.Series(dtype=float)),
+        errors="coerce",
+    ).fillna(0)
+    rows = rows.sort_values("_detector_confidence", ascending=False)
+    paths = []
+    for value in rows.get("crop_path", pd.Series(dtype=str)):
+        path = clean_str(value)
+        if path and Path(path).is_file() and path not in paths:
+            paths.append(path)
+        if len(paths) >= max(0, limit):
+            break
+    return paths
 
 
 def add_whole_sheet_components(
@@ -417,22 +465,65 @@ def main() -> None:
     visual_model = clean_str(
         cfg.get("rag", {}).get("visual_model", "openai/clip-vit-base-patch32")
     ) or "openai/clip-vit-base-patch32"
-    reference_embeddings, visual_status = clip_image_embeddings(
+    reference_sheet_embeddings, visual_status = clip_image_embeddings(
         reference_manifest.get("image_path", pd.Series(dtype=str)).astype(str).tolist(),
         model_name=visual_model,
         enabled=visual_enabled and len(reference_manifest) > 0,
     )
+    max_component_images = int(cfg.get("rag", {}).get("max_component_images", 8))
+    reference_component_embeddings: list[list[np.ndarray]] = []
+    component_visual_statuses: list[str] = []
+    for occurrence_id in reference_manifest.get(
+        "reference_occurrenceID",
+        pd.Series(dtype=str),
+    ).astype(str):
+        crop_paths = component_crop_paths(
+            raw_components,
+            occurrence_id,
+            limit=max_component_images,
+        )
+        vectors, status = clip_image_embeddings(
+            crop_paths,
+            model_name=visual_model,
+            enabled=visual_enabled and bool(crop_paths),
+        )
+        reference_component_embeddings.append(
+            [] if vectors is None else [vector for vector in vectors]
+        )
+        component_visual_statuses.append(
+            "no_component_crops" if not crop_paths else status
+        )
+    reference_embeddings = None
+    if len(reference_manifest):
+        aggregated = []
+        for index in range(len(reference_manifest)):
+            vectors = []
+            if reference_sheet_embeddings is not None:
+                vectors.append(reference_sheet_embeddings[index])
+            vectors.extend(reference_component_embeddings[index])
+            aggregated.append(normalized_mean_embedding(vectors))
+        if aggregated and all(vector is not None for vector in aggregated):
+            reference_embeddings = np.stack(aggregated).astype(np.float32)
     text_embeddings = tfidf_embeddings(
         reference_manifest.get("text", pd.Series(dtype=str)).astype(str).tolist()
     )
     if len(reference_manifest):
-        if reference_embeddings is not None:
+        if reference_sheet_embeddings is not None:
             reference_manifest["full_sheet_visual_embedding"] = [
                 json.dumps(vector.astype(float).tolist())
-                for vector in reference_embeddings
+                for vector in reference_sheet_embeddings
             ]
         else:
             reference_manifest["full_sheet_visual_embedding"] = ""
+        reference_manifest["component_visual_embeddings"] = [
+            json.dumps(
+                [vector.astype(float).tolist() for vector in vectors],
+            )
+            for vectors in reference_component_embeddings
+        ]
+        reference_manifest["component_visual_embedding_status"] = (
+            component_visual_statuses
+        )
         reference_manifest["text_embedding"] = [
             json.dumps(vector.astype(float).tolist()) for vector in text_embeddings
         ]
@@ -482,13 +573,20 @@ def main() -> None:
         image_path = clean_str(image_by_occurrence.get(occurrence_id, {}).get("image_path"))
         query_embedding = None
         if image_path:
+            query_paths = [image_path, *component_crop_paths(
+                components,
+                occurrence_id,
+                limit=max_component_images,
+            )]
             query_vectors, _ = clip_image_embeddings(
-                [image_path],
+                query_paths,
                 model_name=visual_model,
                 enabled=visual_enabled,
             )
             if query_vectors is not None:
-                query_embedding = query_vectors[0]
+                query_embedding = normalized_mean_embedding(
+                    [vector for vector in query_vectors]
+                )
         retrieved = retrieve_hybrid_references(
             query_text=evidence_packet_text(direct_packet),
             query_visual_embedding=query_embedding,

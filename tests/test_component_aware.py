@@ -3,6 +3,7 @@ import zipfile
 from pathlib import Path
 
 import pandas as pd
+import numpy as np
 import pytest
 
 from herbarium_scribe.component_aware import (
@@ -19,6 +20,7 @@ from herbarium_scribe.hespi_layout import (
 )
 from herbarium_scribe.rag import assert_no_rag_leakage
 from herbarium_scribe.review_bundle import read_bundle_csv, read_bundle_jsonl
+from scripts.run_component_aware_eval10 import normalized_mean_embedding
 
 
 def packet_with_identifiers() -> dict:
@@ -158,6 +160,16 @@ def test_empty_component_evidence_skips_llm_call():
     assert meta["llm_status"] == "not_evaluated"
     assert meta["not_evaluated_reason"] == "empty_component_evidence"
     assert record["catalogNumber"]["value"] == ""
+
+
+def test_visual_embedding_average_is_normalized():
+    result = normalized_mean_embedding([
+        np.asarray([1.0, 0.0], dtype=np.float32),
+        np.asarray([0.0, 1.0], dtype=np.float32),
+    ])
+    assert result is not None
+    assert np.linalg.norm(result) == pytest.approx(1.0)
+    assert result.tolist() == pytest.approx([2 ** -0.5, 2 ** -0.5])
 
 
 def test_review_bundle_csv_and_jsonl_loading(tmp_path: Path):
