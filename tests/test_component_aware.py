@@ -7,6 +7,7 @@ import pytest
 
 from herbarium_scribe.component_aware import (
     build_evidence_packets,
+    direct_evidence_packet,
     resolve_catalog_number,
     validate_reconciled_record,
 )
@@ -119,6 +120,26 @@ def test_evidence_packets_keep_confidences_separate():
     assert packet["components"][0]["detector_confidence"] == 0.8
     assert packet["components"][0]["readings"][0]["ocr_confidence"] == 0.6
     assert packet["components"][0]["readings"][0]["model_reported_confidence"] is None
+
+
+def test_whole_sheet_is_only_used_when_component_evidence_is_empty():
+    packet = {
+        "components": [
+            {
+                "region_id": "whole",
+                "component_type": "whole_sheet",
+                "readings": [{"engine": "tesseract", "raw_text": "full sheet"}],
+            },
+            {
+                "region_id": "number",
+                "component_type": "number",
+                "readings": [{"engine": "tesseract", "raw_text": "L.2714152"}],
+            },
+        ]
+    }
+    direct = direct_evidence_packet(packet)
+    assert [item["region_id"] for item in direct["components"]] == ["number"]
+    assert direct["whole_sheet_fallback_used"] is False
 
 
 def test_review_bundle_csv_and_jsonl_loading(tmp_path: Path):

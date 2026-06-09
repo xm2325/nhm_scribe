@@ -14,6 +14,7 @@ from PIL import Image
 from herbarium_scribe.component_aware import (
     build_evidence_packets,
     deterministic_reconciliation,
+    direct_evidence_packet,
     empty_reconciled_field,
     evidence_packet_text,
     flatten_reconciled_record,
@@ -29,6 +30,7 @@ from herbarium_scribe.rag import (
     assert_no_rag_leakage,
     clip_image_embeddings,
     retrieve_hybrid_references,
+    tfidf_embeddings,
 )
 from herbarium_scribe.schema import EXTRACTION_FIELDS
 
@@ -349,6 +351,21 @@ def main() -> None:
         model_name=visual_model,
         enabled=visual_enabled and len(reference_manifest) > 0,
     )
+    text_embeddings = tfidf_embeddings(
+        reference_manifest.get("text", pd.Series(dtype=str)).astype(str).tolist()
+    )
+    if len(reference_manifest):
+        if reference_embeddings is not None:
+            reference_manifest["full_sheet_visual_embedding"] = [
+                json.dumps(vector.astype(float).tolist())
+                for vector in reference_embeddings
+            ]
+        else:
+            reference_manifest["full_sheet_visual_embedding"] = ""
+        reference_manifest["text_embedding"] = [
+            json.dumps(vector.astype(float).tolist()) for vector in text_embeddings
+        ]
+        reference_manifest.to_csv(processed / "rag_reference_manifest.csv", index=False)
 
     packet_by_occurrence = {packet["occurrenceID"]: packet for packet in packets}
     image_by_occurrence = manifest.set_index("occurrenceID").to_dict(orient="index")
@@ -364,6 +381,7 @@ def main() -> None:
             "gold_withheld_until_evaluation": True,
             "components": [],
         })
+        direct_packet = direct_evidence_packet(packet)
         whole_packet = packet_subset(packet, {"whole_sheet"})
         primary_packet = packet_subset(packet, {"primary_specimen_label"})
         baseline_packets = {
@@ -396,7 +414,7 @@ def main() -> None:
             if query_vectors is not None:
                 query_embedding = query_vectors[0]
         retrieved = retrieve_hybrid_references(
-            query_text=evidence_packet_text(packet),
+            query_text=evidence_packet_text(direct_packet),
             query_visual_embedding=query_embedding,
             query_institution_code=clean_str(gold_row.get("institutionCode")),
             references=references,
@@ -415,14 +433,14 @@ def main() -> None:
             ("component_aware_with_rag", retrieved),
         ]:
             if cfg.get("llm", {}).get("backend") == "none":
-                record = deterministic_reconciliation(packet)
+                record = deterministic_reconciliation(direct_packet)
                 meta = {
                     "llm_status": "not_evaluated",
                     "not_evaluated_reason": "missing_api_credentials_or_disabled",
                     "raw_output": "",
                 }
             else:
-                record, meta = reconcile_with_optional_llm(packet, cfg, context)
+                record, meta = reconcile_with_optional_llm(direct_packet, cfg, context)
             predictions.append(flatten_reconciled_record(
                 occurrence_id,
                 branch,

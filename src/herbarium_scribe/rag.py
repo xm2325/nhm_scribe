@@ -98,6 +98,10 @@ def tfidf_cosine_scores(query: str, texts: list[str]) -> list[float]:
     return (vectors[1:] @ vectors[0]).astype(float).tolist()
 
 
+def tfidf_embeddings(texts: list[str]) -> np.ndarray:
+    return _tfidf_vectors(texts)
+
+
 def clip_image_embeddings(
     image_paths: list[str],
     *,

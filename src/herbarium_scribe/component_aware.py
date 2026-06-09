@@ -10,7 +10,12 @@ import pandas as pd
 from .extract_rules import extract_rule_based
 from .llm_backends import call_llm_with_metadata
 from .metadata import clean_str
-from .ocr import decode_barcodes, ocr_catalog_number_ensemble, ocr_image_tesseract
+from .ocr import (
+    decode_barcodes,
+    ocr_catalog_number_ensemble,
+    ocr_image_hespi_trocr,
+    ocr_image_tesseract,
+)
 from .pipeline import _parse_llm_json
 from .qwen_vision import image_data_url
 from .schema import EXTRACTION_FIELDS
@@ -147,6 +152,29 @@ def read_sheet_components(
                 decoder_status="not_applicable",
                 candidates=candidates,
             ))
+        htr_cfg = cfg.get("component_aware", {}).get("handwriting_recognition", {})
+        if (
+            bool(htr_cfg.get("enabled", False))
+            and component_type in {
+                clean_str(value).lower()
+                for value in htr_cfg.get(
+                    "component_types",
+                    ["primary_specimen_label", "annotation_label"],
+                )
+            }
+        ):
+            model_size = clean_str(htr_cfg.get("model_size", "base")) or "base"
+            htr_text, htr_status, _ = ocr_image_hespi_trocr(
+                crop_path,
+                model_size=model_size,
+            )
+            rows.append(_reading(
+                component=component,
+                engine=f"hespi_trocr_{model_size}",
+                raw_text=htr_text,
+                ocr_status=htr_status,
+                decoder_status="not_applicable",
+            ))
     vision_cfg = cfg.get("component_aware", {}).get("multimodal_transcription", {})
     if bool(vision_cfg.get("enabled", False)):
         supported_types = {
@@ -257,6 +285,23 @@ def evidence_packet_text(packet: dict[str, Any]) -> str:
                     f"engine={reading.get('engine')}]\n{text}"
                 )
     return "\n\n".join(blocks)
+
+
+def direct_evidence_packet(packet: dict[str, Any]) -> dict[str, Any]:
+    non_whole = [
+        component
+        for component in packet.get("components", [])
+        if clean_str(component.get("component_type")).lower() != "whole_sheet"
+        and any(clean_str(reading.get("raw_text")) for reading in component.get("readings", []))
+    ]
+    if non_whole:
+        return {**packet, "components": non_whole, "whole_sheet_fallback_used": False}
+    whole = [
+        component
+        for component in packet.get("components", [])
+        if clean_str(component.get("component_type")).lower() == "whole_sheet"
+    ]
+    return {**packet, "components": whole, "whole_sheet_fallback_used": True}
 
 
 def identifier_candidates(packet: dict[str, Any]) -> list[dict[str, Any]]:
