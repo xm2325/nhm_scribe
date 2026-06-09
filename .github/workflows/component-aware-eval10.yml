@@ -11,6 +11,10 @@ on:
 permissions:
   contents: read
 
+concurrency:
+  group: component-aware-eval10
+  cancel-in-progress: true
+
 jobs:
   eval10:
     runs-on: ubuntu-latest
