@@ -26,8 +26,8 @@ llm:
   backend: none
 vision_llm:
   backend: qwen_api
-  base_url: https://ws-w2c3yvu33653t8gs.eu-central-1.maas.aliyuncs.com/compatible-mode/v1
-  model_name: qwen3-vl-plus
+  base_url: https://ws-jta6lz3g3givn2ww.ap-southeast-1.maas.aliyuncs.com/compatible-mode/v1
+  model_name: qwen3.7-plus
   temperature: 0.0
   max_tokens: 5000
   timeout_seconds: 300

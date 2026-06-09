@@ -267,7 +267,7 @@ def call_llm_with_metadata(messages: list[dict[str, Any]], config: dict[str, Any
     if backend in {"qwen", "qwen_api", "qwen_dashscope"}:
         key = os.environ.get("DASHSCOPE_API_KEY") or os.environ.get("QWEN_API_KEY")
         base_url = os.environ.get("QWEN_BASE_URL") or lcfg.get("base_url") or "https://dashscope-intl.aliyuncs.com/compatible-mode/v1"
-        model = os.environ.get("QWEN_MODEL") or lcfg.get("model_name") or lcfg.get("model") or "qwen3-vl-plus"
+        model = os.environ.get("QWEN_MODEL") or lcfg.get("model_name") or lcfg.get("model") or "qwen3.7-plus"
         min_interval = _float_value(os.environ.get("QWEN_MIN_INTERVAL_SECONDS") or lcfg.get("min_interval_seconds"), 0.0)
         base.update({
             "requested_model": model,

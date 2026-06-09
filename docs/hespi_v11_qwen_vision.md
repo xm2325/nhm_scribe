@@ -36,10 +36,10 @@ QWEN_API_KEY
 The key is never committed or printed. The workspace endpoint is:
 
 ```text
-https://ws-w2c3yvu33653t8gs.eu-central-1.maas.aliyuncs.com/compatible-mode/v1
+https://ws-jta6lz3g3givn2ww.ap-southeast-1.maas.aliyuncs.com/compatible-mode/v1
 ```
 
-The model name is a workflow input and defaults to `qwen3-vl-plus`. The workflow
+The model name is a workflow input and defaults to `qwen3.7-plus`. The workflow
 queries the workspace `/models` endpoint and saves the advertised model IDs so
 an unavailable deployment name can be diagnosed without exposing the key.
 

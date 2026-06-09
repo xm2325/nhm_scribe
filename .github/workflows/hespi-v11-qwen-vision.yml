@@ -6,7 +6,7 @@ on:
       qwen_model:
         description: Qwen vision deployment/model name
         required: true
-        default: qwen3-vl-plus
+        default: qwen3.7-plus
         type: string
   push:
     branches:
@@ -23,8 +23,8 @@ jobs:
     timeout-minutes: 180
     env:
       QWEN_API_KEY: ${{ secrets.QWEN_API_KEY }}
-      QWEN_BASE_URL: https://ws-w2c3yvu33653t8gs.eu-central-1.maas.aliyuncs.com/compatible-mode/v1
-      QWEN_MODEL: ${{ inputs.qwen_model || 'qwen3-vl-plus' }}
+      QWEN_BASE_URL: https://ws-jta6lz3g3givn2ww.ap-southeast-1.maas.aliyuncs.com/compatible-mode/v1
+      QWEN_MODEL: ${{ inputs.qwen_model || 'qwen3.7-plus' }}
       QWEN_MIN_INTERVAL_SECONDS: "1.0"
     steps:
       - name: Checkout repository anonymously

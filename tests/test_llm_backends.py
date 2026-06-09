@@ -27,7 +27,7 @@ def test_qwen_workspace_env_overrides_config(monkeypatch):
 
     monkeypatch.setenv("QWEN_API_KEY", "test-key")
     monkeypatch.setenv("QWEN_BASE_URL", "https://workspace.example.test/compatible-mode/v1")
-    monkeypatch.setenv("QWEN_MODEL", "qwen3-vl-plus")
+    monkeypatch.setenv("QWEN_MODEL", "qwen3.7-plus")
     monkeypatch.setenv("QWEN_MIN_INTERVAL_SECONDS", "1.5")
     monkeypatch.setattr("herbarium_scribe.llm_backends._chat_completions_request", fake_request)
     messages = [{
@@ -40,7 +40,7 @@ def test_qwen_workspace_env_overrides_config(monkeypatch):
     out = call_llm_with_metadata(messages, {"llm": {"backend": "qwen_api", "model_name": "wrong"}})
 
     assert captured["base_url"] == "https://workspace.example.test/compatible-mode/v1"
-    assert captured["model"] == "qwen3-vl-plus"
+    assert captured["model"] == "qwen3.7-plus"
     assert captured["messages"] == messages
     assert out["min_interval_seconds"] == 1.5
 

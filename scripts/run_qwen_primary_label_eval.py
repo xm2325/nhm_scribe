@@ -44,7 +44,14 @@ def query_models(base_url: str, api_key: str) -> dict[str, Any]:
         ]
         return {"reachable": True, "models": models, "error": ""}
     except urllib.error.HTTPError as exc:
-        return {"reachable": True, "models": [], "error": f"http_error:{exc.code}"}
+        try:
+            detail = exc.read().decode("utf-8", errors="replace").strip()
+        except Exception:
+            detail = ""
+        error = f"http_error:{exc.code}"
+        if detail:
+            error = f"{error}:{detail[:1200]}"
+        return {"reachable": True, "models": [], "error": error}
     except Exception as exc:
         return {"reachable": False, "models": [], "error": f"{type(exc).__name__}:{exc}"}
 
@@ -89,6 +96,7 @@ def write_report(
     parsed_count: int,
     model_probe: dict[str, Any],
     preflight: dict[str, Any],
+    vision_preflight: dict[str, Any],
     requested_model: str,
     actual_models: list[str],
     detail: pd.DataFrame,
@@ -127,6 +135,10 @@ def write_report(
         f"- Models advertised by endpoint: `{', '.join(model_probe.get('models', []))}`\n",
         f"- Text-chat preflight actual model: `{preflight.get('actual_model', '')}`\n",
         f"- Text-chat preflight error: `{preflight.get('error_message', '')}`\n",
+        f"- Vision preflight occurrenceID: `{vision_preflight.get('occurrenceID', '')}`\n",
+        f"- Vision preflight status: `{vision_preflight.get('status', 'not_attempted')}`\n",
+        f"- Vision preflight actual model: `{vision_preflight.get('actual_model', '')}`\n",
+        f"- Vision preflight error: `{vision_preflight.get('error_message', '')}`\n",
         "\n## Overall result\n",
         markdown_table(overall),
         "\n\n## Field result\n",
@@ -237,6 +249,15 @@ def main() -> None:
         encoding="utf-8",
     )
     provider_blocker = clean_str(preflight["error_message"])
+    vision_preflight: dict[str, Any] = {
+        "attempted": False,
+        "occurrenceID": "",
+        "status": "not_attempted",
+        "requested_model": requested_model,
+        "actual_model": "",
+        "raw_output_length": 0,
+        "error_message": provider_blocker,
+    }
 
     ocr_primary = ocr[
         ocr["occurrenceID"].isin(eval_ids)
@@ -325,7 +346,20 @@ def main() -> None:
             "response_body": meta.get("response", {}),
         }
         outputs.append(item)
-        if "HTTP 401" in clean_str(item["error_message"]) or "HTTP 403" in clean_str(item["error_message"]):
+        if not vision_preflight["attempted"]:
+            vision_preflight = {
+                "attempted": True,
+                "occurrenceID": occurrence_id,
+                "status": item["status"],
+                "requested_model": item["requested_model"],
+                "actual_model": item["actual_model"],
+                "raw_output_length": item["raw_output_length"],
+                "finish_reason": item["finish_reason"],
+                "error_message": item["error_message"],
+            }
+            if clean_str(item["error_message"]):
+                provider_blocker = clean_str(item["error_message"])
+        elif "HTTP 401" in clean_str(item["error_message"]) or "HTTP 403" in clean_str(item["error_message"]):
             provider_blocker = clean_str(item["error_message"])
         if not parsed:
             continue
@@ -383,6 +417,11 @@ def main() -> None:
     with output_jsonl.open("w", encoding="utf-8") as handle:
         for row in outputs:
             handle.write(json.dumps(row, ensure_ascii=False) + "\n")
+    vision_preflight_path = paths["processed"] / "qwen_vision_preflight.json"
+    vision_preflight_path.write_text(
+        json.dumps(vision_preflight, ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
     prediction_df = pd.DataFrame(predictions)
     detail = pd.DataFrame(detail_rows)
     summary = field_metrics(detail)
@@ -409,6 +448,7 @@ def main() -> None:
         parsed_count=len(prediction_df),
         model_probe=model_probe,
         preflight=preflight,
+        vision_preflight=vision_preflight,
         requested_model=requested_model,
         actual_models=actual_models,
         detail=detail,
@@ -426,6 +466,7 @@ def main() -> None:
             manifest_path,
             model_probe_path,
             preflight_path,
+            vision_preflight_path,
             report_path,
         ],
     )
