@@ -301,8 +301,9 @@ def display_component_aware_record(catalog_number: str) -> None:
                 "review required": clean(prediction.get(f"{field}_review_required")),
                 "gold value": gold_value,
                 "exact match": (
-                    bool(field_exact_match(field, predicted, gold_value))
-                    if gold_value else ""
+                    "yes" if field_exact_match(field, predicted, gold_value) else "no"
+                ) if gold_value else (
+                    "not evaluable"
                 ),
             })
     st.markdown("**Final field reconciliation**")
