@@ -30,6 +30,8 @@ from herbarium_scribe.schema import EXTRACTION_FIELDS, flatten_record, validate_
 APP_BUNDLE = ROOT / "app_data" / "real_eval_100_streamlit_bundle.zip"
 HESPI_V10_REPORT = ROOT / "app_data" / "hespi_v10_ocr_visual_report.zip"
 HESPI_REPORT_DIR = "hespi_v10_ocr_visual_report"
+QWEN_VISION_REPORT = ROOT / "app_data" / "hespi_v11_qwen_streamlit_bundle.zip"
+QWEN_VISION_DIR = "hespi_v11_qwen_streamlit_bundle"
 LOCAL_PROCESSED = ROOT / "data" / "processed"
 LOCAL_LLM = ROOT / "data" / "interim" / "llm"
 THUMB_PREFIX = "app_data/thumbnails/real_eval_100"
@@ -236,6 +238,190 @@ def show_hespi_v10_home(report_zip: Path) -> None:
             hespi_render_image(str(report_zip), contact_sheet, "Hespi v10 OCR visual report", max_width=780)
 
     hespi_display_summary_tables(str(report_zip))
+
+
+# -----------------------------------------------------------------------------
+# Qwen primary-label vision comparison
+# -----------------------------------------------------------------------------
+
+@st.cache_data(show_spinner=False)
+def qwen_read_csv(path: str, filename: str) -> pd.DataFrame:
+    member = f"{QWEN_VISION_DIR}/{filename}"
+    with zipfile.ZipFile(path) as zf:
+        with zf.open(member) as handle:
+            return pd.read_csv(handle, dtype=str).fillna("")
+
+
+@st.cache_data(show_spinner=False)
+def qwen_read_jsonl(path: str, filename: str) -> list[dict[str, Any]]:
+    member = f"{QWEN_VISION_DIR}/{filename}"
+    with zipfile.ZipFile(path) as zf:
+        text = zf.read(member).decode("utf-8")
+    return [json.loads(line) for line in text.splitlines() if line.strip()]
+
+
+def qwen_output_index(rows: list[dict[str, Any]]) -> dict[str, dict[str, Any]]:
+    return {clean(row.get("occurrenceID")): row for row in rows}
+
+
+def qwen_normalized_contains(needle: str, haystack: str) -> bool:
+    normalized_needle = re.sub(r"[^a-z0-9]+", "", clean(needle).lower())
+    normalized_haystack = re.sub(r"[^a-z0-9]+", "", clean(haystack).lower())
+    return bool(normalized_needle) and normalized_needle in normalized_haystack
+
+
+def qwen_field_table(output: dict[str, Any], detail: pd.DataFrame) -> pd.DataFrame:
+    parsed = output.get("parsed_json") or {}
+    fields = parsed.get("fields", {}) if isinstance(parsed, dict) else {}
+    transcription = clean(parsed.get("full_transcription")) if isinstance(parsed, dict) else ""
+    rows = []
+    for field in EXTRACTION_FIELDS:
+        item = fields.get(field, {}) if isinstance(fields, dict) else {}
+        if not isinstance(item, dict):
+            item = {"value": item}
+        match = detail[detail["field"] == field] if not detail.empty else pd.DataFrame()
+        value = clean(item.get("value"))
+        evidence = clean(item.get("evidence_span"))
+        confidence = clean(item.get("confidence"))
+        evidence_found = not value or qwen_normalized_contains(evidence or value, transcription)
+        rows.append({
+            "field": field,
+            "gold": clean(match.iloc[0].get("gold")) if not match.empty else "",
+            "Qwen value": value,
+            "confidence": confidence,
+            "evidence": evidence,
+            "evidence in transcription": evidence_found,
+            "exact match": clean(match.iloc[0].get("exact_match")) if not match.empty else "",
+            "token F1": clean(match.iloc[0].get("token_f1")) if not match.empty else "",
+        })
+    return pd.DataFrame(rows)
+
+
+def show_qwen_vision_comparison(report_zip: Path) -> None:
+    st.title("Qwen Primary-Label Vision")
+    st.caption(
+        "Automatically cropped primary labels sent directly to Qwen-VL. "
+        "The complete visual transcription is preserved before field extraction."
+    )
+    if not report_zip.exists():
+        st.info(
+            "The Qwen eval10 workflow is ready, but its result bundle has not been added yet. "
+            "Run “Hespi v11 eval10 Qwen primary-label vision” and add the generated "
+            "hespi_v11_qwen_streamlit_bundle.zip to app_data."
+        )
+        return
+
+    manifest = qwen_read_csv(str(report_zip), "primary_label_manifest.csv")
+    detail = qwen_read_csv(str(report_zip), "qwen_primary_label_evaluation_detail.csv")
+    summary = qwen_read_csv(str(report_zip), "qwen_primary_label_evaluation_summary.csv")
+    outputs = qwen_read_jsonl(str(report_zip), "qwen_vision_outputs.jsonl")
+    output_by_id = qwen_output_index(outputs)
+    record_ids = [clean(value) for value in manifest["occurrenceID"].drop_duplicates() if clean(value)]
+    parsed_count = sum(row.get("status") == "parsed" for row in outputs)
+    evidence_risks = 0
+    for occurrence_id in record_ids:
+        output = output_by_id.get(occurrence_id, {})
+        record_detail = detail[detail["occurrenceID"] == occurrence_id]
+        table = qwen_field_table(output, record_detail)
+        evidence_risks += int((table["Qwen value"].ne("") & ~table["evidence in transcription"]).sum())
+
+    metrics = st.columns(4)
+    metrics[0].metric("Records with primary label", len(record_ids))
+    metrics[1].metric("Parsed Qwen outputs", parsed_count)
+    metrics[2].metric("Evidence mismatches", evidence_risks)
+    actual_models = sorted({
+        clean(row.get("actual_model"))
+        for row in outputs
+        if clean(row.get("actual_model"))
+    })
+    metrics[3].metric("Actual model", ", ".join(actual_models) or "unknown")
+
+    st.subheader("Field-level comparison")
+    st.caption(
+        "The two evidence-proxy columns measure whether gold values appear in a transcription; "
+        "they are not OCR CER/WER."
+    )
+    st.dataframe(summary, use_container_width=True, hide_index=True)
+
+    selected = st.selectbox(
+        "Record",
+        record_ids,
+        format_func=lambda occurrence_id: (
+            clean(manifest[manifest["occurrenceID"] == occurrence_id].iloc[0].get("catalogNumber"))
+            or occurrence_id
+        ),
+    )
+    crop_rows = manifest[manifest["occurrenceID"] == selected].sort_values("image_index")
+    output = output_by_id.get(selected, {})
+    parsed = output.get("parsed_json") or {}
+    record_detail = detail[detail["occurrenceID"] == selected]
+
+    st.divider()
+    image_col, transcript_col = st.columns([0.9, 1.1])
+    with image_col:
+        st.subheader("1. Primary-label crop")
+        with zipfile.ZipFile(report_zip) as zf:
+            for _, crop in crop_rows.iterrows():
+                member = f"{QWEN_VISION_DIR}/{clean(crop.get('bundle_crop_path'))}"
+                image_bytes = zf.read(member)
+                image = Image.open(io.BytesIO(image_bytes))
+                st.image(
+                    image,
+                    caption=f"Crop {clean(crop.get('image_index'))} · {image.width} × {image.height}",
+                    use_container_width=True,
+                )
+                st.caption(
+                    f"Detection confidence: {clean(crop.get('layout_confidence')) or 'unknown'}"
+                )
+    with transcript_col:
+        st.subheader("2. Complete visual transcription")
+        if output.get("error_message"):
+            st.warning(clean(output.get("error_message")))
+        transcription = clean(parsed.get("full_transcription")) if isinstance(parsed, dict) else ""
+        st.text_area(
+            "Qwen transcription",
+            transcription,
+            height=310,
+            label_visibility="collapsed",
+        )
+        transcriptions = parsed.get("transcriptions", []) if isinstance(parsed, dict) else []
+        uncertain = [
+            clean(span)
+            for item in transcriptions
+            if isinstance(item, dict)
+            for span in item.get("uncertain_spans", [])
+            if clean(span)
+        ]
+        if uncertain:
+            st.warning("Uncertain visual readings: " + " · ".join(uncertain))
+        with st.expander("Tesseract on the same crop", expanded=True):
+            for _, crop in crop_rows.iterrows():
+                st.markdown(f"**Crop {clean(crop.get('image_index'))}**")
+                st.code(clean(crop.get("tesseract_text")) or "(empty)", language="text")
+
+    st.subheader("3. Direct multimodal field extraction")
+    field_table = qwen_field_table(output, record_detail)
+    risky = field_table[
+        field_table["Qwen value"].ne("")
+        & ~field_table["evidence in transcription"]
+    ]
+    if len(risky):
+        st.error(
+            "Potential extraction bug: one or more values are not present in Qwen's own transcription. "
+            "Treat them as unsupported."
+        )
+    st.dataframe(field_table, use_container_width=True, hide_index=True)
+
+    with st.expander("Raw Qwen response and diagnostics", expanded=False):
+        diagnostic_cols = st.columns(4)
+        diagnostic_cols[0].metric("Status", clean(output.get("status")) or "missing")
+        diagnostic_cols[1].metric("Raw chars", clean(output.get("raw_output_length")) or "0")
+        diagnostic_cols[2].metric("Finish reason", clean(output.get("finish_reason")) or "unknown")
+        diagnostic_cols[3].metric(
+            "Tokens",
+            clean((output.get("usage") or {}).get("total_tokens")) or "unknown",
+        )
+        st.code(clean(output.get("raw_output")), language="json")
 
 
 # -----------------------------------------------------------------------------
@@ -834,11 +1020,22 @@ def main() -> None:
     st.sidebar.caption(f"Data: {data['source']}")
     page = st.sidebar.radio(
         "View",
-        ["Hespi v10 Results", "Pipeline Review", "Image Gallery", "Overview", "Record Explorer", "LLM/RAG Trace", "Live Upload"],
+        [
+            "Hespi v10 Results",
+            "Qwen Vision Comparison",
+            "Pipeline Review",
+            "Image Gallery",
+            "Overview",
+            "Record Explorer",
+            "LLM/RAG Trace",
+            "Live Upload",
+        ],
         key="page",
     )
     if page == "Hespi v10 Results":
         show_hespi_v10_home(HESPI_V10_REPORT)
+    elif page == "Qwen Vision Comparison":
+        show_qwen_vision_comparison(QWEN_VISION_REPORT)
     elif page == "Overview":
         show_overview(data)
     elif page == "Pipeline Review":

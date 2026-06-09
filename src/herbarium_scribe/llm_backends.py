@@ -52,7 +52,7 @@ def _chat_completions_request(
     base_url: str,
     api_key: str,
     model: str,
-    messages: list[dict[str, str]],
+    messages: list[dict[str, Any]],
     temperature: float = 0.0,
     max_tokens: int = 1200,
     timeout_seconds: int = 60,
@@ -141,7 +141,7 @@ def _response_format_config(value: Any) -> dict[str, Any] | None:
     return None
 
 
-def call_llm_with_metadata(messages: list[dict[str, str]], config: dict[str, Any]) -> dict[str, Any]:
+def call_llm_with_metadata(messages: list[dict[str, Any]], config: dict[str, Any]) -> dict[str, Any]:
     backend = (config.get("llm", {}).get("backend", "none") or "none").lower()
     lcfg = config.get("llm", {})
     base: dict[str, Any] = {
@@ -237,15 +237,22 @@ def call_llm_with_metadata(messages: list[dict[str, str]], config: dict[str, Any
             return base
     if backend in {"qwen", "qwen_api", "qwen_dashscope"}:
         key = os.environ.get("DASHSCOPE_API_KEY") or os.environ.get("QWEN_API_KEY")
-        base_url = lcfg.get("base_url") or os.environ.get("QWEN_BASE_URL") or "https://dashscope-intl.aliyuncs.com/compatible-mode/v1"
-        model = lcfg.get("model_name") or lcfg.get("model") or "qwen-plus"
-        base.update({"requested_model": model, "api_key_present": bool(key), "base_url": base_url})
+        base_url = os.environ.get("QWEN_BASE_URL") or lcfg.get("base_url") or "https://dashscope-intl.aliyuncs.com/compatible-mode/v1"
+        model = os.environ.get("QWEN_MODEL") or lcfg.get("model_name") or lcfg.get("model") or "qwen3-vl-plus"
+        min_interval = _float_value(os.environ.get("QWEN_MIN_INTERVAL_SECONDS") or lcfg.get("min_interval_seconds"), 0.0)
+        base.update({
+            "requested_model": model,
+            "api_key_present": bool(key),
+            "base_url": base_url,
+            "min_interval_seconds": min_interval,
+        })
         if not key:
             msg = "DASHSCOPE_API_KEY or QWEN_API_KEY is not set; returning empty Qwen output."
             logger.warning(msg)
             base["error_message"] = msg
             return base
         try:
+            _apply_request_spacing(f"{backend}:{base_url}:{model}", min_interval)
             result = _chat_completions_request(
                 base_url=base_url,
                 api_key=key,
@@ -256,6 +263,7 @@ def call_llm_with_metadata(messages: list[dict[str, str]], config: dict[str, Any
                 timeout_seconds=int(lcfg.get("timeout_seconds", 60)),
                 retries=int(lcfg.get("retries", 0)),
                 retry_backoff_seconds=float(lcfg.get("retry_backoff_seconds", 2.0)),
+                response_format=_response_format_config(lcfg.get("response_format")),
             )
             base.update(result)
             base["endpoint_reachable"] = True
@@ -313,5 +321,5 @@ def call_llm_with_metadata(messages: list[dict[str, str]], config: dict[str, Any
     return {**base, "error_message": f"unknown_backend:{backend}"}
 
 
-def call_llm(messages: list[dict[str, str]], config: dict[str, Any]) -> str:
+def call_llm(messages: list[dict[str, Any]], config: dict[str, Any]) -> str:
     return str(call_llm_with_metadata(messages, config).get("content", ""))

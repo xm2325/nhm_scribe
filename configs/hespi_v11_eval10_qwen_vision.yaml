@@ -1,0 +1,41 @@
+extends: configs/hespi_v4_eval10_shared_lean.yaml
+method_name: qwen_primary_label_vision
+paths:
+  data_dir: data/experiments/hespi_v11_qwen_vision
+  reports_dir: reports/hespi_v11_qwen_vision
+experiment:
+  title: "Hespi v11 Eval10: Qwen Primary Label Vision"
+layout:
+  strategy: hespi_hybrid
+  include_whole_sheet: true
+  include_primary_labels: true
+  include_supplemental_components: false
+  include_label_fields: false
+  max_primary_labels: 2
+  primary_label_padding_fraction: 0.04
+ocr:
+  backend: tesseract
+  allow_fixture_text: false
+  barcode_decoder:
+    enabled: false
+  catalog_number_ensemble:
+    enabled: false
+  handwriting_recognition:
+    enabled: false
+llm:
+  backend: none
+vision_llm:
+  backend: qwen_api
+  base_url: https://ws-w2c3yvu33653t8gs.eu-central-1.maas.aliyuncs.com/compatible-mode/v1
+  model_name: qwen3-vl-plus
+  temperature: 0.0
+  max_tokens: 5000
+  timeout_seconds: 300
+  retries: 2
+  retry_backoff_seconds: 20
+  min_interval_seconds: 1.0
+  response_format: json_object
+  max_image_dimension: 2200
+outputs:
+  prefix: hespi_v11_qwen_vision
+  report_name: hespi_v11_qwen_vision_report.md

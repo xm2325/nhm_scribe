@@ -1,0 +1,123 @@
+name: Hespi v11 eval10 Qwen primary-label vision
+
+on:
+  workflow_dispatch:
+    inputs:
+      qwen_model:
+        description: Qwen vision deployment/model name
+        required: true
+        default: qwen3-vl-plus
+        type: string
+  push:
+    branches:
+      - main
+    paths:
+      - ".github/run-hespi-v11-qwen-vision.trigger"
+
+permissions:
+  contents: read
+
+jobs:
+  eval10:
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    env:
+      QWEN_API_KEY: ${{ secrets.QWEN_API_KEY }}
+      QWEN_BASE_URL: https://ws-w2c3yvu33653t8gs.eu-central-1.maas.aliyuncs.com/compatible-mode/v1
+      QWEN_MODEL: ${{ inputs.qwen_model || 'qwen3-vl-plus' }}
+      QWEN_MIN_INTERVAL_SECONDS: "1.0"
+    steps:
+      - name: Checkout repository anonymously
+        run: |
+          git init .
+          git remote add origin https://github.com/${{ github.repository }}.git
+          git fetch --depth=1 origin ${{ github.sha }}
+          git checkout --detach FETCH_HEAD
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+
+      - name: Cache Hespi model downloads
+        uses: actions/cache@v5
+        with:
+          path: ~/.cache/hespi
+          key: hespi-0.6.2-${{ runner.os }}
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y tesseract-ocr
+          python -m pip install --upgrade pip
+          python -m pip install -e '.[dev,hespi]'
+
+      - name: Check Qwen configuration
+        run: |
+          test -n "$QWEN_API_KEY"
+          echo "Qwen key present; value is not printed."
+          echo "Qwen endpoint: $QWEN_BASE_URL"
+          echo "Requested model: $QWEN_MODEL"
+
+      - name: Run tests
+        run: python -m pytest
+
+      - name: Build validated shared image set
+        run: python scripts/prepare_hespi_v2_paired_eval.py
+
+      - name: Detect and OCR primary labels
+        run: |
+          python scripts/run_stage_metadata.py --config configs/hespi_v11_eval10_qwen_vision.yaml
+          python scripts/run_stage_download.py --config configs/hespi_v11_eval10_qwen_vision.yaml
+          python scripts/run_stage_layout.py --config configs/hespi_v11_eval10_qwen_vision.yaml
+          python scripts/run_stage_ocr.py --config configs/hespi_v11_eval10_qwen_vision.yaml
+
+      - name: Run Qwen primary-label vision evaluation
+        run: python scripts/run_qwen_primary_label_eval.py --config configs/hespi_v11_eval10_qwen_vision.yaml
+
+      - name: Verify outputs
+        run: |
+          python - <<'PY'
+          import json
+          from pathlib import Path
+          import pandas as pd
+
+          root = Path("data/experiments/hespi_v11_qwen_vision")
+          eval_set = pd.read_csv(root / "processed/eval_set.csv", dtype=str).fillna("")
+          manifest = pd.read_csv(root / "processed/qwen_primary_label_manifest.csv", dtype=str).fillna("")
+          rows = [
+              json.loads(line)
+              for line in (root / "interim/llm/qwen_primary_label_vision_outputs.jsonl").read_text(encoding="utf-8").splitlines()
+              if line.strip()
+          ]
+          parsed = [row for row in rows if row.get("status") == "parsed"]
+          if len(eval_set) != 10:
+              raise SystemExit(f"Expected 10 EVAL records; got {len(eval_set)}")
+          if manifest["occurrenceID"].nunique() < 8:
+              raise SystemExit("Fewer than 8 EVAL records produced primary-label crops.")
+          if not parsed:
+              errors = sorted({row.get("error_message", "") for row in rows if row.get("error_message")})
+              raise SystemExit(f"No Qwen outputs parsed. Errors: {errors[:3]}")
+          archive = Path("reports/hespi_v11_qwen_vision/hespi_v11_qwen_streamlit_bundle.zip")
+          if not archive.exists():
+              raise SystemExit("Missing Streamlit result bundle.")
+          print({
+              "eval_n": len(eval_set),
+              "primary_label_n": manifest["occurrenceID"].nunique(),
+              "parsed_n": len(parsed),
+              "actual_models": sorted({row.get("actual_model", "") for row in parsed}),
+          })
+          PY
+
+      - name: Upload Qwen vision outputs
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: herbarium-scribe-hespi-v11-qwen-vision-${{ github.run_id }}
+          retention-days: 30
+          path: |
+            data/experiments/hespi_v2_shared/processed/
+            data/experiments/hespi_v11_qwen_vision/processed/
+            data/experiments/hespi_v11_qwen_vision/interim/hespi_lite/
+            data/experiments/hespi_v11_qwen_vision/interim/ocr/
+            data/experiments/hespi_v11_qwen_vision/interim/llm/
+            reports/hespi_v11_qwen_vision/

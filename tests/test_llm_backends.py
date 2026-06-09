@@ -11,6 +11,33 @@ def test_qwen_api_without_key_returns_empty(monkeypatch):
     assert call_llm([{"role": "user", "content": "hello"}], cfg) == ""
 
 
+def test_qwen_workspace_env_overrides_config(monkeypatch):
+    captured = {}
+
+    def fake_request(**kwargs):
+        captured.update(kwargs)
+        return {"content": "{}", "actual_model": kwargs["model"], "error_message": "", "response": {}}
+
+    monkeypatch.setenv("QWEN_API_KEY", "test-key")
+    monkeypatch.setenv("QWEN_BASE_URL", "https://workspace.example.test/compatible-mode/v1")
+    monkeypatch.setenv("QWEN_MODEL", "qwen3-vl-plus")
+    monkeypatch.setenv("QWEN_MIN_INTERVAL_SECONDS", "1.5")
+    monkeypatch.setattr("herbarium_scribe.llm_backends._chat_completions_request", fake_request)
+    messages = [{
+        "role": "user",
+        "content": [
+            {"type": "text", "text": "transcribe"},
+            {"type": "image_url", "image_url": {"url": "data:image/jpeg;base64,abc"}},
+        ],
+    }]
+    out = call_llm_with_metadata(messages, {"llm": {"backend": "qwen_api", "model_name": "wrong"}})
+
+    assert captured["base_url"] == "https://workspace.example.test/compatible-mode/v1"
+    assert captured["model"] == "qwen3-vl-plus"
+    assert captured["messages"] == messages
+    assert out["min_interval_seconds"] == 1.5
+
+
 def test_nvidia_api_without_key_returns_empty(monkeypatch):
     monkeypatch.delenv("NVIDIA_API_KEY", raising=False)
     monkeypatch.delenv("NGC_API_KEY", raising=False)
