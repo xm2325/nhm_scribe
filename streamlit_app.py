@@ -25,10 +25,15 @@ from herbarium_scribe.llm_backends import call_llm_with_metadata
 from herbarium_scribe.ocr import ocr_image_tesseract
 from herbarium_scribe.pipeline import _parse_llm_json
 from herbarium_scribe.rag import build_rag_corpus, format_context_for_prompt, retrieve_context
+from herbarium_scribe.review_bundle import (
+    bundle_names as component_bundle_names,
+    read_bundle_csv as component_read_csv,
+)
 from herbarium_scribe.schema import EXTRACTION_FIELDS, flatten_record, validate_record
 
 APP_BUNDLE = ROOT / "app_data" / "real_eval_100_streamlit_bundle.zip"
 HESPI_V10_REPORT = ROOT / "app_data" / "hespi_v10_ocr_visual_report.zip"
+COMPONENT_AWARE_REPORT = ROOT / "app_data" / "component_aware_eval10_review_bundle.zip"
 HESPI_REPORT_DIR = "hespi_v10_ocr_visual_report"
 GPT_PRIMARY_LABEL_JSON = ROOT / "app_data" / "gpt_primary_label_reviews_eval10.json"
 QWEN_PRIMARY_LABEL_BUNDLE = ROOT / "app_data" / "hespi_v11_qwen_streamlit_bundle.zip"
@@ -144,6 +149,117 @@ def hespi_display_summary_tables(path: str) -> None:
     st.dataframe(htr_summary, use_container_width=True, hide_index=True)
 
 
+@st.cache_data(show_spinner=False)
+def component_aware_tables(path: str) -> dict[str, pd.DataFrame]:
+    if not Path(path).exists():
+        return {}
+    names = set(component_bundle_names(path))
+    tables = {}
+    for filename in [
+        "sheet_components.csv",
+        "component_readings.csv",
+        "rag_retrieval_results.csv",
+        "reconciled_predictions_flat.csv",
+        "branch_comparison.csv",
+        "field_comparison.csv",
+        "eval_set.csv",
+    ]:
+        member = f"component_aware_eval10/processed/{filename}"
+        if member in names:
+            tables[filename] = component_read_csv(path, filename)
+    return tables
+
+
+def display_component_aware_record(catalog_number: str) -> None:
+    tables = component_aware_tables(str(COMPONENT_AWARE_REPORT))
+    if not tables:
+        return
+    components = tables.get("sheet_components.csv", pd.DataFrame())
+    selected = components[
+        components.get("catalogNumber", pd.Series(dtype=str)).astype(str) == catalog_number
+    ].copy()
+    if selected.empty:
+        return
+    occurrence_id = clean(selected.iloc[0].get("occurrenceID"))
+    readings = tables.get("component_readings.csv", pd.DataFrame())
+    reading_rows = readings[readings.get("occurrenceID", pd.Series(dtype=str)).astype(str) == occurrence_id]
+    evidence = selected.merge(
+        reading_rows,
+        on=["occurrenceID", "catalogNumber", "region_id", "component_type", "crop_path"],
+        how="left",
+        suffixes=("", "_reading"),
+    )
+    st.markdown("**Component-aware evidence**")
+    evidence_columns = [
+        "region_id", "component_type", "bbox_xyxy", "detector_confidence",
+        "engine", "raw_text", "ocr_confidence", "ocr_status", "decoder_status",
+    ]
+    st.dataframe(
+        evidence[[column for column in evidence_columns if column in evidence.columns]],
+        use_container_width=True,
+        hide_index=True,
+    )
+
+    retrieval = tables.get("rag_retrieval_results.csv", pd.DataFrame())
+    retrieval = retrieval[
+        retrieval.get("occurrenceID", pd.Series(dtype=str)).astype(str) == occurrence_id
+    ]
+    st.markdown("**Retrieved similar reference specimens**")
+    st.caption("These are retrieval references for context, not predictions.")
+    retrieval_columns = [
+        "rank", "reference_occurrenceID", "institutionCode", "visual_similarity",
+        "text_similarity", "combined_similarity", "gold_scientificName",
+        "gold_recordedBy", "gold_eventDate",
+    ]
+    if retrieval.empty:
+        st.info("No retrieval references are available for this record.")
+    else:
+        st.dataframe(
+            retrieval[[column for column in retrieval_columns if column in retrieval.columns]],
+            use_container_width=True,
+            hide_index=True,
+        )
+
+    predictions = tables.get("reconciled_predictions_flat.csv", pd.DataFrame())
+    predictions = predictions[
+        predictions.get("occurrenceID", pd.Series(dtype=str)).astype(str) == occurrence_id
+    ]
+    eval_set = tables.get("eval_set.csv", pd.DataFrame())
+    gold_rows = eval_set[
+        eval_set.get("occurrenceID", pd.Series(dtype=str)).astype(str) == occurrence_id
+    ]
+    gold = gold_rows.iloc[0].to_dict() if len(gold_rows) else {}
+    final_rows = []
+    preferred = predictions[predictions.get("branch", pd.Series(dtype=str)).eq("component_aware_with_rag")]
+    if preferred.empty:
+        preferred = predictions[predictions.get("branch", pd.Series(dtype=str)).eq("component_aware_no_rag")]
+    if len(preferred):
+        prediction = preferred.iloc[0]
+        for field in EXTRACTION_FIELDS:
+            predicted = clean(prediction.get(field))
+            gold_value = clean(gold.get(field))
+            final_rows.append({
+                "field": field,
+                "final value": predicted,
+                "evidence source": clean(prediction.get(f"{field}_evidence_source")),
+                "visible evidence": clean(prediction.get(f"{field}_evidence_span")),
+                "supporting sources": clean(prediction.get(f"{field}_supporting_sources")),
+                "alternative candidates": clean(prediction.get(f"{field}_alternative_candidates")),
+                "model-reported confidence": clean(prediction.get(f"{field}_model_reported_confidence")),
+                "review required": clean(prediction.get(f"{field}_review_required")),
+                "gold value": gold_value,
+                "exact match": (
+                    hespi_normalise_identifier(predicted) == hespi_normalise_identifier(gold_value)
+                    if gold_value else ""
+                ),
+            })
+    st.markdown("**Final field reconciliation**")
+    if final_rows:
+        st.dataframe(pd.DataFrame(final_rows), use_container_width=True, hide_index=True)
+    else:
+        st.info("No component-aware reconciliation is available for this record.")
+
+
 def hespi_display_record(path: str, catalog_number: str, detail: pd.DataFrame) -> None:
     rows = detail[detail["catalogNumber"].astype(str) == catalog_number].copy()
     overview = hespi_find_overview_member(path, catalog_number)
@@ -196,6 +312,7 @@ def hespi_display_record(path: str, catalog_number: str, detail: pd.DataFrame) -
         st.dataframe(rows[visible], use_container_width=True, hide_index=True)
 
         display_gpt_primary_label_review(rows, catalog_number)
+        display_component_aware_record(catalog_number)
 
         if crops:
             with st.expander(f"OCR-focused crop images ({len(crops)})", expanded=False):
@@ -258,6 +375,20 @@ def show_hespi_v10_home(report_zip: Path) -> None:
             hespi_render_image(str(report_zip), contact_sheet, "Hespi v10 OCR visual report", max_width=780)
 
     hespi_display_summary_tables(str(report_zip))
+    component_tables = component_aware_tables(str(COMPONENT_AWARE_REPORT))
+    branch_comparison = component_tables.get("branch_comparison.csv", pd.DataFrame())
+    if len(branch_comparison):
+        st.subheader("Component-aware four-branch comparison")
+        st.caption(
+            "The same frozen ten-image set is evaluated as full-sheet, primary-label, "
+            "component-aware without RAG, and component-aware with RAG."
+        )
+        st.dataframe(branch_comparison, use_container_width=True, hide_index=True)
+    else:
+        st.info(
+            "Component-aware review bundle is not installed. "
+            "Add app_data/component_aware_eval10_review_bundle.zip to extend this page."
+        )
 
 
 

@@ -1,0 +1,98 @@
+name: Component-aware Hespi eval10
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  eval10:
+    runs-on: ubuntu-latest
+    timeout-minutes: 300
+    env:
+      QWEN_API_KEY: ${{ secrets.QWEN_API_KEY }}
+      QWEN_BASE_URL: https://ws-jta6lz3g3givn2ww.ap-southeast-1.maas.aliyuncs.com/compatible-mode/v1
+      QWEN_MODEL: qwen3.7-plus
+      HF_HUB_DISABLE_XET: "1"
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+
+      - name: Cache Hespi and Hugging Face models
+        uses: actions/cache@v5
+        with:
+          path: |
+            ~/.cache/hespi
+            ~/.cache/huggingface
+          key: component-aware-hespi-clip-${{ runner.os }}-v1
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y tesseract-ocr
+          python -m pip install --upgrade pip
+          python -m pip install -e '.[dev,hespi,rag]'
+
+      - name: Run tests
+        run: python -m pytest
+
+      - name: Build or reuse frozen image set
+        run: python scripts/prepare_hespi_v2_paired_eval.py
+
+      - name: Run component-aware eval10
+        run: python scripts/run_component_aware_eval10.py
+
+      - name: Verify expected artifacts
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          import pandas as pd
+
+          processed = Path("data/experiments/component_aware_eval10/processed")
+          required = [
+              "sheet_components.csv",
+              "component_readings.csv",
+              "evidence_packets.jsonl",
+              "rag_reference_manifest.csv",
+              "rag_retrieval_results.csv",
+              "reconciled_predictions.jsonl",
+              "reconciled_predictions_flat.csv",
+              "branch_comparison.csv",
+              "field_comparison.csv",
+              "review_queue.csv",
+          ]
+          missing = [name for name in required if not (processed / name).exists()]
+          if missing:
+              raise SystemExit(f"Missing component-aware artifacts: {missing}")
+          branches = set(pd.read_csv(processed / "branch_comparison.csv")["branch"])
+          expected = {
+              "baseline_full_sheet",
+              "baseline_primary_label",
+              "component_aware_no_rag",
+              "component_aware_with_rag",
+          }
+          if branches != expected:
+              raise SystemExit(f"Unexpected branches: {branches}")
+          eval_set = pd.read_csv(processed / "eval_set.csv")
+          if len(eval_set) != 10:
+              raise SystemExit(f"Expected 10 EVAL records, got {len(eval_set)}")
+          archive = Path("reports/component_aware_eval10/review_bundle.zip")
+          if not archive.exists():
+              raise SystemExit("Missing review bundle")
+          print({"eval_n": len(eval_set), "branches": sorted(branches), "review_bundle": str(archive)})
+          PY
+
+      - name: Upload review bundle and diagnostics
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: herbarium-scribe-component-aware-eval10-${{ github.run_id }}
+          retention-days: 30
+          path: |
+            data/experiments/component_aware_eval10/processed/
+            data/experiments/component_aware_eval10/interim/hespi_lite/
+            reports/component_aware_eval10/

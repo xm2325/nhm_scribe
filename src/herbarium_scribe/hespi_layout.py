@@ -6,7 +6,7 @@ from pathlib import Path
 from typing import Any
 
 import pandas as pd
-from PIL import Image, ImageOps
+from PIL import Image, ImageDraw, ImageOps
 
 from .download import safe_filename
 from .logging_utils import get_logger
@@ -19,6 +19,7 @@ PRIMARY_LABEL_CLASSES = {
     "primary_label",
     "institutional_label",
 }
+IDENTIFIER_COMPONENT_CLASSES = {"barcode", "database_label", "number"}
 
 
 def _normalise_label(value: Any) -> str:
@@ -96,6 +97,152 @@ def _clamp_bbox(bbox: list[int], width: int, height: int) -> list[int]:
     x1 = max(x0 + 1, min(x1, width))
     y1 = max(y0 + 1, min(y1, height))
     return [x0, y0, x1, y1]
+
+
+def normalise_bbox(bbox: list[int], width: int, height: int) -> list[float]:
+    fixed = _clamp_bbox(bbox, width, height)
+    return [
+        round(fixed[0] / width, 6),
+        round(fixed[1] / height, 6),
+        round(fixed[2] / width, 6),
+        round(fixed[3] / height, 6),
+    ]
+
+
+def tile_windows(
+    width: int,
+    height: int,
+    tile_size: int = 1024,
+    overlap: float = 0.2,
+) -> list[list[int]]:
+    tile_size = max(64, int(tile_size))
+    overlap = max(0.0, min(float(overlap), 0.9))
+    stride = max(1, int(round(tile_size * (1.0 - overlap))))
+
+    def starts(length: int) -> list[int]:
+        if length <= tile_size:
+            return [0]
+        values = list(range(0, max(1, length - tile_size + 1), stride))
+        last = length - tile_size
+        if not values or values[-1] != last:
+            values.append(last)
+        return values
+
+    return [
+        [x, y, min(x + tile_size, width), min(y + tile_size, height)]
+        for y in starts(height)
+        for x in starts(width)
+    ]
+
+
+def tile_bbox_to_full(tile_bbox: list[int], tile_window: list[int]) -> list[int]:
+    return [
+        tile_bbox[0] + tile_window[0],
+        tile_bbox[1] + tile_window[1],
+        tile_bbox[2] + tile_window[0],
+        tile_bbox[3] + tile_window[1],
+    ]
+
+
+def bbox_iou(left: list[int], right: list[int]) -> float:
+    x0 = max(left[0], right[0])
+    y0 = max(left[1], right[1])
+    x1 = min(left[2], right[2])
+    y1 = min(left[3], right[3])
+    intersection = max(0, x1 - x0) * max(0, y1 - y0)
+    left_area = max(0, left[2] - left[0]) * max(0, left[3] - left[1])
+    right_area = max(0, right[2] - right[0]) * max(0, right[3] - right[1])
+    union = left_area + right_area - intersection
+    return intersection / union if union else 0.0
+
+
+def non_max_suppression(
+    detections: list[dict[str, Any]],
+    iou_threshold: float = 0.45,
+) -> list[dict[str, Any]]:
+    kept: list[dict[str, Any]] = []
+    for candidate in sorted(detections, key=lambda row: float(row.get("confidence", 0)), reverse=True):
+        if any(
+            candidate.get("label") == existing.get("label")
+            and bbox_iou(candidate["bbox"], existing["bbox"]) >= iou_threshold
+            for existing in kept
+        ):
+            continue
+        kept.append(candidate)
+    return kept
+
+
+def _save_component_annotation(
+    image: Image.Image,
+    detections: list[dict[str, Any]],
+    out_path: Path,
+) -> str:
+    try:
+        canvas = image.copy()
+        draw = ImageDraw.Draw(canvas)
+        for item in detections:
+            bbox = item["bbox"]
+            label = f"{item['label']} {float(item.get('confidence', 0)):.2f}"
+            draw.rectangle(tuple(bbox), outline=(220, 40, 40), width=4)
+            draw.text((bbox[0] + 4, max(0, bbox[1] - 16)), label, fill=(220, 40, 40))
+        out_path.parent.mkdir(parents=True, exist_ok=True)
+        canvas.save(out_path)
+        return str(out_path)
+    except Exception as exc:
+        logger.warning("Could not save component annotation %s: %s", out_path, exc)
+        return ""
+
+
+def detect_components_with_tiled_fallback(
+    model: Any,
+    image_path: Path,
+    *,
+    resolution: int,
+    confidence: float,
+    tile_size: int = 1024,
+    tile_overlap: float = 0.2,
+    tile_confidence: float | None = None,
+    nms_iou: float = 0.45,
+    tile_dir: Path | None = None,
+) -> tuple[list[dict[str, Any]], Any, bool]:
+    detections, result = _predict(model, image_path, resolution, confidence)
+    reliable_identifier = any(
+        item["label"] in IDENTIFIER_COMPONENT_CLASSES
+        and float(item["confidence"]) >= confidence
+        for item in detections
+    )
+    if reliable_identifier:
+        return detections, result, False
+
+    image = Image.open(image_path).convert("RGB")
+    tile_detections: list[dict[str, Any]] = []
+    tile_dir = tile_dir or image_path.parent / "component_tiles"
+    tile_dir.mkdir(parents=True, exist_ok=True)
+    for index, window in enumerate(tile_windows(image.width, image.height, tile_size, tile_overlap)):
+        tile_path = tile_dir / f"tile_{index:03d}.jpg"
+        image.crop(tuple(window)).save(tile_path)
+        local, _ = _predict(
+            model,
+            tile_path,
+            min(resolution, max(tile_size, 64)),
+            float(tile_confidence if tile_confidence is not None else confidence),
+        )
+        for item in local:
+            tile_detections.append({
+                **item,
+                "bbox": _clamp_bbox(
+                    tile_bbox_to_full(item["bbox"], window),
+                    image.width,
+                    image.height,
+                ),
+                "detection_source": "tiled_fallback",
+                "tile_window": window,
+            })
+    combined = [
+        {**item, "detection_source": item.get("detection_source", "full_sheet")}
+        for item in detections
+    ] + tile_detections
+    return non_max_suppression(combined, nms_iou), result, True
 
 
 def _crop(
@@ -187,6 +334,11 @@ def detect_hespi_lite_layout(
     sheet_resolution = int(layout_cfg.get("sheet_component_resolution", 1280))
     field_resolution = int(layout_cfg.get("label_field_resolution", 1280))
     component_confidence = float(layout_cfg.get("component_confidence", 0.25))
+    tiled_fallback_enabled = bool(layout_cfg.get("tiled_identifier_fallback", True))
+    tile_size = int(layout_cfg.get("tile_size", 1024))
+    tile_overlap = float(layout_cfg.get("tile_overlap", 0.20))
+    tile_confidence = float(layout_cfg.get("tile_confidence", component_confidence))
+    tile_nms_iou = float(layout_cfg.get("tile_nms_iou", 0.45))
     field_confidence = float(layout_cfg.get("field_confidence", 0.20))
     strategy = clean_str(layout_cfg.get("strategy", "hespi_lite")).lower()
     hybrid = strategy == "hespi_hybrid"
@@ -269,6 +421,7 @@ def detect_hespi_lite_layout(
         n_primary = 0
         n_fields = 0
         n_selected_fields = 0
+        tiled_fallback_used = False
 
         if not image_path or not Path(image_path).exists():
             fallback_reason = "missing_image"
@@ -309,17 +462,37 @@ def detect_hespi_lite_layout(
                         "crop_path": image_path,
                         "fixture_label_text": clean_str(record.get("fixture_label_text", "")),
                     })
-                components, sheet_result = _predict(
-                    sheet_model,
-                    Path(image_path),
-                    sheet_resolution,
-                    component_confidence,
-                )
+                if tiled_fallback_enabled:
+                    components, sheet_result, tiled_fallback_used = detect_components_with_tiled_fallback(
+                        sheet_model,
+                        Path(image_path),
+                        resolution=sheet_resolution,
+                        confidence=component_confidence,
+                        tile_size=tile_size,
+                        tile_overlap=tile_overlap,
+                        tile_confidence=tile_confidence,
+                        nms_iou=tile_nms_iou,
+                        tile_dir=record_dir / "tiles",
+                    )
+                else:
+                    components, sheet_result = _predict(
+                        sheet_model,
+                        Path(image_path),
+                        sheet_resolution,
+                        component_confidence,
+                    )
                 n_components = len(components)
-                sheet_annotation = _save_annotation(
-                    sheet_result,
-                    record_dir / "sheet_components_annotated.jpg",
-                )
+                if tiled_fallback_used:
+                    sheet_annotation = _save_component_annotation(
+                        source_image,
+                        components,
+                        record_dir / "sheet_components_annotated.jpg",
+                    )
+                else:
+                    sheet_annotation = _save_annotation(
+                        sheet_result,
+                        record_dir / "sheet_components_annotated.jpg",
+                    )
                 primary: list[dict[str, Any]] = []
                 for index, component in enumerate(components):
                     label = component["label"]
@@ -334,14 +507,25 @@ def detect_hespi_lite_layout(
                     is_primary = label in primary_classes and len(primary) < max_primary_labels
                     component_rows.append({
                         "occurrenceID": occurrence_id,
+                        "catalogNumber": clean_str(record.get("catalogNumber")),
+                        "region_id": f"{occurrence_id}::component_{index}_{label}",
                         "component_id": f"{occurrence_id}::component_{index}",
                         "component_type": label,
+                        "detector_model": "hespi_sheet_component_model",
+                        "detector_confidence": component["confidence"],
                         "confidence": component["confidence"],
+                        "bbox_xyxy": json.dumps(fixed_bbox),
+                        "bbox_normalized_xyxy": json.dumps(
+                            normalise_bbox(fixed_bbox, source_image.width, source_image.height)
+                        ),
+                        "coordinate_space": "full_sheet_pixels",
                         "bbox": json.dumps(fixed_bbox),
+                        "source_image_path": image_path,
                         "image_path": image_path,
                         "crop_path": crop_path,
                         "selected_for_field_detection": is_primary,
                         "annotation_path": sheet_annotation,
+                        "detection_source": component.get("detection_source", "full_sheet"),
                     })
                     if include_supplemental_components and label in supplemental_headers:
                         selected_rows.append({
@@ -514,6 +698,7 @@ def detect_hespi_lite_layout(
             "label_field_count": n_fields,
             "selected_label_field_count": n_selected_fields,
             "ocr_region_count": len(selected_rows),
+            "tiled_identifier_fallback_used": tiled_fallback_used,
             "fallback_used": bool(fallback_reason),
             "fallback_reason": fallback_reason,
             "sheet_annotation_path": sheet_annotation,
@@ -521,8 +706,11 @@ def detect_hespi_lite_layout(
         })
 
     component_columns = [
-        "occurrenceID", "component_id", "component_type", "confidence", "bbox",
+        "occurrenceID", "catalogNumber", "region_id", "component_id", "component_type",
+        "detector_model", "detector_confidence", "confidence", "bbox_xyxy",
+        "bbox_normalized_xyxy", "coordinate_space", "bbox", "source_image_path",
         "image_path", "crop_path", "selected_for_field_detection", "annotation_path",
+        "detection_source",
     ]
     field_columns = [
         "occurrenceID", "region_id", "region_label", "region_type", "layout_method",
@@ -536,7 +724,7 @@ def detect_hespi_lite_layout(
         "occurrenceID", "image_path", "hespi_available", "hespi_version", "hespi_device",
         "sheet_component_count",
         "primary_label_count", "label_field_count", "selected_label_field_count",
-        "ocr_region_count", "fallback_used",
+        "ocr_region_count", "tiled_identifier_fallback_used", "fallback_used",
         "fallback_reason", "sheet_annotation_path", "field_annotation_paths",
     ]
     layout_df = pd.DataFrame(layout_rows)

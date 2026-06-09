@@ -1,0 +1,58 @@
+extends: configs/hespi_v2_eval20_hybrid.yaml
+name: Component-aware Hespi eval10
+paths:
+  data_dir: data/experiments/component_aware_eval10
+  reports_dir: reports/component_aware_eval10
+sampling:
+  frozen_split_dir: data/experiments/hespi_v2_shared/processed
+  frozen_demo_size: 2
+  frozen_eval_size: 10
+layout:
+  strategy: hespi_hybrid
+  sheet_component_resolution: 2048
+  component_confidence: 0.15
+  tiled_identifier_fallback: true
+  tile_size: 1024
+  tile_overlap: 0.20
+  tile_confidence: 0.15
+  tile_nms_iou: 0.45
+  include_whole_sheet: true
+  include_primary_labels: true
+  include_supplemental_components: true
+  include_label_fields: false
+ocr:
+  backend: tesseract
+  allow_fixture_text: false
+  catalog_number_ensemble:
+    enabled: true
+    upscale_factor: 4
+    psm_modes: [7, 13]
+    max_candidates: 8
+  barcode_decoder:
+    enabled: true
+component_aware:
+  multimodal_transcription:
+    enabled: false
+    component_types:
+      - primary_specimen_label
+      - annotation_label
+llm:
+  backend: qwen_api
+  base_url: https://ws-jta6lz3g3givn2ww.ap-southeast-1.maas.aliyuncs.com/compatible-mode/v1
+  model_name: qwen3.7-plus
+  temperature: 0
+  max_tokens: 6000
+  timeout_seconds: 300
+  retries: 2
+  retry_backoff_seconds: 20
+  response_format: json_object
+rag:
+  enabled: true
+  visual_enabled: true
+  visual_model: openai/clip-vit-base-patch32
+  top_k: 3
+  visual_weight: 0.45
+  text_weight: 0.45
+  institution_bonus_weight: 0.10
+outputs:
+  prefix: component_aware_eval10
