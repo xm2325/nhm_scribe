@@ -21,12 +21,14 @@ if str(SRC) not in sys.path:
     sys.path.insert(0, str(SRC))
 
 from herbarium_scribe.extract_rules import extract_rule_based
+from herbarium_scribe.evaluate import field_exact_match
 from herbarium_scribe.llm_backends import call_llm_with_metadata
 from herbarium_scribe.ocr import ocr_image_tesseract
 from herbarium_scribe.pipeline import _parse_llm_json
 from herbarium_scribe.rag import build_rag_corpus, format_context_for_prompt, retrieve_context
 from herbarium_scribe.review_bundle import (
     bundle_names as component_bundle_names,
+    read_bundle_bytes as component_read_bytes,
     read_bundle_csv as component_read_csv,
 )
 from herbarium_scribe.schema import EXTRACTION_FIELDS, flatten_record, validate_record
@@ -181,6 +183,31 @@ def display_component_aware_record(catalog_number: str) -> None:
     if selected.empty:
         return
     occurrence_id = clean(selected.iloc[0].get("occurrenceID"))
+    overview_members = [
+        clean(value)
+        for value in selected.get(
+            "review_overview_member",
+            pd.Series(dtype=str),
+        ).drop_duplicates()
+        if clean(value)
+    ]
+    if overview_members:
+        member = overview_members[0]
+        image_bytes = component_read_bytes(COMPONENT_AWARE_REPORT, member)
+        image = Image.open(io.BytesIO(image_bytes))
+        st.markdown("**Component-aware annotated overview**")
+        st.image(
+            image,
+            caption="Full-sheet component detections",
+            width=min(image.width, 1200),
+        )
+        st.download_button(
+            "Download component-aware overview",
+            data=image_bytes,
+            file_name=Path(member).name,
+            mime="image/jpeg",
+            key=f"download-component-overview-{hespi_normalise_identifier(catalog_number)}",
+        )
     readings = tables.get("component_readings.csv", pd.DataFrame())
     reading_rows = readings[readings.get("occurrenceID", pd.Series(dtype=str)).astype(str) == occurrence_id]
     evidence = selected.merge(
@@ -199,6 +226,31 @@ def display_component_aware_record(catalog_number: str) -> None:
         use_container_width=True,
         hide_index=True,
     )
+    crop_rows = selected[
+        selected.get("review_crop_member", pd.Series(dtype=str)).astype(str).ne("")
+        & selected.get("component_type", pd.Series(dtype=str)).astype(str).ne("whole_sheet")
+    ]
+    if len(crop_rows):
+        with st.expander(
+            f"Component-aware crops ({len(crop_rows)})",
+            expanded=False,
+        ):
+            crop_records = crop_rows.to_dict(orient="records")
+            for start in range(0, len(crop_records), 3):
+                columns = st.columns(3)
+                for column, crop_record in zip(columns, crop_records[start : start + 3]):
+                    with column:
+                        member = clean(crop_record.get("review_crop_member"))
+                        image_bytes = component_read_bytes(COMPONENT_AWARE_REPORT, member)
+                        image = Image.open(io.BytesIO(image_bytes))
+                        st.image(
+                            image,
+                            caption=(
+                                f"{clean(crop_record.get('component_type'))} · "
+                                f"{clean(crop_record.get('region_id'))}"
+                            ),
+                            width=min(image.width, 360),
+                        )
 
     retrieval = tables.get("rag_retrieval_results.csv", pd.DataFrame())
     retrieval = retrieval[
@@ -249,7 +301,7 @@ def display_component_aware_record(catalog_number: str) -> None:
                 "review required": clean(prediction.get(f"{field}_review_required")),
                 "gold value": gold_value,
                 "exact match": (
-                    hespi_normalise_identifier(predicted) == hespi_normalise_identifier(gold_value)
+                    bool(field_exact_match(field, predicted, gold_value))
                     if gold_value else ""
                 ),
             })

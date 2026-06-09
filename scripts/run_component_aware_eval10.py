@@ -22,6 +22,7 @@ from herbarium_scribe.component_aware import (
     reconcile_with_optional_llm,
 )
 from herbarium_scribe.config import load_config
+from herbarium_scribe.download import safe_filename
 from herbarium_scribe.evaluate import field_exact_match, field_token_f1, truthy_flag
 from herbarium_scribe.hespi_layout import normalise_bbox
 from herbarium_scribe.metadata import clean_str
@@ -312,20 +313,44 @@ def build_review_bundle(
     (bundle / "assets" / "overviews").mkdir(parents=True)
     (bundle / "assets" / "crops").mkdir(parents=True)
     for path in processed.glob("*"):
-        if path.is_file():
+        if path.is_file() and path.name != "sheet_components.csv":
             shutil.copy2(path, bundle / "processed" / path.name)
     shutil.copy2(report_path, bundle / report_path.name)
-    for value in components.get("annotation_path", pd.Series(dtype=str)).drop_duplicates():
-        source = Path(clean_str(value))
-        if source.exists():
-            shutil.copy2(source, bundle / "assets" / "overviews" / source.name)
-    for value in components.get("crop_path", pd.Series(dtype=str)).drop_duplicates():
-        source = Path(clean_str(value))
-        if source.exists():
-            occurrence = components.loc[
-                components["crop_path"].astype(str) == str(value), "catalogNumber"
-            ].astype(str).iloc[0]
-            shutil.copy2(source, bundle / "assets" / "crops" / f"{occurrence}_{source.name}")
+    bundle_components = components.copy()
+    overview_members: list[str] = []
+    crop_members: list[str] = []
+    for _, component in bundle_components.iterrows():
+        identifier = safe_filename(
+            clean_str(component.get("catalogNumber"))
+            or clean_str(component.get("occurrenceID"))
+        )
+        annotation_value = clean_str(component.get("annotation_path"))
+        annotation = Path(annotation_value) if annotation_value else None
+        if annotation is not None and annotation.is_file():
+            overview_name = f"{identifier}_{annotation.name}"
+            destination = bundle / "assets" / "overviews" / overview_name
+            if not destination.exists():
+                shutil.copy2(annotation, destination)
+            overview_members.append(
+                f"component_aware_eval10/assets/overviews/{overview_name}"
+            )
+        else:
+            overview_members.append("")
+
+        crop_value = clean_str(component.get("crop_path"))
+        crop = Path(crop_value) if crop_value else None
+        if crop is not None and crop.is_file():
+            region = safe_filename(clean_str(component.get("region_id")) or crop.stem)
+            crop_name = f"{identifier}_{region}{crop.suffix.lower() or '.jpg'}"
+            destination = bundle / "assets" / "crops" / crop_name
+            if not destination.exists():
+                shutil.copy2(crop, destination)
+            crop_members.append(f"component_aware_eval10/assets/crops/{crop_name}")
+        else:
+            crop_members.append("")
+    bundle_components["review_overview_member"] = overview_members
+    bundle_components["review_crop_member"] = crop_members
+    bundle_components.to_csv(bundle / "processed" / "sheet_components.csv", index=False)
     archive = report_dir / "review_bundle.zip"
     with zipfile.ZipFile(archive, "w", compression=zipfile.ZIP_DEFLATED) as zf:
         for source in bundle.rglob("*"):
