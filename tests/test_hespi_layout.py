@@ -329,6 +329,10 @@ def test_htr_prompt_gate_is_conservative_for_dates_and_collectors():
     assert assess_htr_prompt("day", "agree") == (False, "implausible_day")
     assert assess_htr_prompt("year", "1898") == (True, "plausible_year")
     assert assess_htr_prompt("year", "necessary") == (False, "implausible_year")
+    assert assess_htr_prompt("year", "1893", "1898") == (
+        False,
+        "year_conflicts_with_tesseract",
+    )
     assert assess_htr_prompt("collector", "R. E. Holttum", "") == (
         True,
         "collector_initial",
@@ -344,6 +348,13 @@ def test_htr_prompt_gate_is_conservative_for_dates_and_collectors():
         "collector",
         "In other projects",
         "yi pits aan hec",
+    )
+    assert accepted is False
+    assert reason.startswith("collector_unconfirmed:")
+    accepted, reason = assess_htr_prompt(
+        "collector",
+        "Real Noosalm",
+        "den Noorakhy",
     )
     assert accepted is False
     assert reason.startswith("collector_unconfirmed:")

@@ -65,7 +65,16 @@ def assess_htr_prompt(
             if token.isdigit() and len(token) == 4
         ]
         plausible = len(years) == 1 and 1500 <= years[0] <= 2100
-        return (True, "plausible_year") if plausible else (False, "implausible_year")
+        if not plausible:
+            return False, "implausible_year"
+        source_years = [
+            int(token)
+            for token in re.findall(r"\d{4}", clean_str(source_text))
+            if 1500 <= int(token) <= 2100
+        ]
+        if source_years and years[0] not in source_years:
+            return False, "year_conflicts_with_tesseract"
+        return True, "plausible_year"
     if field == "collector":
         normalized = re.sub(r"[^a-z0-9]", "", value.lower())
         source_normalized = re.sub(r"[^a-z0-9]", "", clean_str(source_text).lower())
@@ -77,7 +86,7 @@ def assess_htr_prompt(
         has_initial = bool(re.search(r"(?:^|\s)[A-Z]\.", value))
         if has_initial:
             return True, "collector_initial"
-        if agreement >= 0.45:
+        if agreement >= 0.55:
             return True, f"collector_ocr_agreement:{agreement:.2f}"
         return False, f"collector_unconfirmed:{agreement:.2f}"
     return False, "unsupported_region_type"

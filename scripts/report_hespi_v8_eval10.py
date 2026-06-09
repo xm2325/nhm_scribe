@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 import re
 from pathlib import Path
 
@@ -9,11 +10,21 @@ import pandas as pd
 from herbarium_scribe.evaluate import field_token_f1
 
 
-ROOT = Path("data/experiments/hespi_v8_eval10")
+ROOT = Path(os.environ.get("HESPI_HTR_DATA_DIR", "data/experiments/hespi_v8_eval10"))
 PROCESSED = ROOT / "processed"
 LLM = ROOT / "interim" / "llm"
-REPORT_DIR = Path("reports/hespi_v8_eval10")
-METHOD = "deepseek_v4_pro_nonthinking_htr"
+REPORT_DIR = Path(os.environ.get("HESPI_HTR_REPORT_DIR", "reports/hespi_v8_eval10"))
+METHOD = os.environ.get("HESPI_HTR_METHOD", "deepseek_v4_pro_nonthinking_htr")
+REPORT_PREFIX = os.environ.get("HESPI_HTR_REPORT_PREFIX", "hespi_v8")
+REPORT_TITLE = os.environ.get(
+    "HESPI_HTR_REPORT_TITLE",
+    "Hespi v8 Eval10 Supplementary HTR Report",
+)
+MODEL_LABEL = os.environ.get("HESPI_HTR_MODEL_LABEL", "TrOCR-small")
+OUTPUTS_NAME = os.environ.get(
+    "HESPI_HTR_OUTPUTS_NAME",
+    "hespi_v8_eval10_outputs.jsonl",
+)
 TARGET_REGION_TYPES = {"collector", "year", "month", "day"}
 V7_REFERENCE = {
     "run_id": 27197202840,
@@ -177,7 +188,7 @@ def main() -> None:
         evidence_summary = pd.DataFrame()
 
     htr = target[target["engine_family"].eq("trocr")].copy()
-    output_path = LLM / "hespi_v8_eval10_outputs.jsonl"
+    output_path = LLM / OUTPUTS_NAME
     outputs = [
         json.loads(line)
         for line in output_path.read_text(encoding="utf-8").splitlines()
@@ -218,6 +229,13 @@ def main() -> None:
         "event_date_token_f1": event_date_f1,
         "htr_regions": len(htr),
         "htr_nonempty_regions": int(htr["ocr_text"].astype(str).str.strip().ne("").sum()) if len(htr) else 0,
+        "htr_prompt_accepted_regions": int(
+            htr.get("htr_prompt_accepted", pd.Series(index=htr.index, dtype=str))
+            .astype(str)
+            .str.lower()
+            .eq("true")
+            .sum()
+        ) if len(htr) else 0,
         "htr_error_regions": int(
             htr["ocr_status"]
             .astype(str)
@@ -238,12 +256,15 @@ def main() -> None:
     summary["event_date_f1_delta_vs_v7"] = (
         summary["event_date_token_f1"] - V7_REFERENCE["event_date_token_f1"]
     )
+    summary["htr_prompt_acceptance_rate"] = (
+        summary["htr_prompt_accepted_regions"] / summary["htr_regions"]
+    )
 
-    summary.to_csv(REPORT_DIR / "hespi_v8_summary.csv", index=False)
-    field_metrics.to_csv(REPORT_DIR / "hespi_v8_field_metrics.csv", index=False)
-    paired.to_csv(REPORT_DIR / "hespi_v8_htr_tesseract_pairs.csv", index=False)
-    evidence.to_csv(REPORT_DIR / "hespi_v8_htr_evidence_detail.csv", index=False)
-    evidence_summary.to_csv(REPORT_DIR / "hespi_v8_htr_evidence_summary.csv", index=False)
+    summary.to_csv(REPORT_DIR / f"{REPORT_PREFIX}_summary.csv", index=False)
+    field_metrics.to_csv(REPORT_DIR / f"{REPORT_PREFIX}_field_metrics.csv", index=False)
+    paired.to_csv(REPORT_DIR / f"{REPORT_PREFIX}_htr_tesseract_pairs.csv", index=False)
+    evidence.to_csv(REPORT_DIR / f"{REPORT_PREFIX}_htr_evidence_detail.csv", index=False)
+    evidence_summary.to_csv(REPORT_DIR / f"{REPORT_PREFIX}_htr_evidence_summary.csv", index=False)
 
     row = summary.iloc[0]
     scale_ready = (
@@ -254,11 +275,11 @@ def main() -> None:
         and float(row["review_required_rate"]) <= 0.30
     )
     lines = [
-        "# Hespi v8 Eval10 Supplementary HTR Report\n",
+        f"# {REPORT_TITLE}\n",
         "\n## Experiment\n",
         "- The EVAL set, whole-sheet OCR, barcode decoder, catalogue resolver, GBIF checks, and DeepSeek settings are unchanged from v7.\n",
         "- Hespi label-field detection adds only collector, year, month, and day crops.\n",
-        "- Each crop keeps its Tesseract text and receives a supplementary Microsoft TrOCR-small handwritten reading.\n",
+        f"- Each crop keeps its Tesseract text and receives a supplementary Microsoft {MODEL_LABEL} handwritten reading.\n",
         "- TrOCR output is a hypothesis, not an automatic replacement or source of filled values.\n",
         f"- Historical reference: Hespi v7, GitHub Actions run `{V7_REFERENCE['run_id']}`.\n",
         "\n## Summary\n",
@@ -277,7 +298,7 @@ def main() -> None:
         "- A field-level improvement must appear in the final recordedBy or eventDate metrics, not only in one attractive crop example.\n",
         "- Ten records are a debugging sample, not a production performance estimate.\n",
     ]
-    report = REPORT_DIR / "hespi_v8_improvement_report.md"
+    report = REPORT_DIR / f"{REPORT_PREFIX}_improvement_report.md"
     report.write_text("".join(lines), encoding="utf-8")
     print(report)
 

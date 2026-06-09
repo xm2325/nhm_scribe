@@ -1,0 +1,130 @@
+name: Hespi v10 eval10 filtered TrOCR base
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+    paths:
+      - ".github/run-hespi-v10-eval10.trigger"
+
+permissions:
+  contents: read
+
+jobs:
+  eval10:
+    runs-on: ubuntu-latest
+    timeout-minutes: 240
+    env:
+      DEEPSEEK_API_KEY: ${{ secrets.DEEPSEEK_API_KEY_SELF }}
+      DEEPSEEK_BASE_URL: https://api.deepseek.com
+      DEEPSEEK_MODEL: deepseek-v4-pro
+      DEEPSEEK_MIN_INTERVAL_SECONDS: "1.0"
+      HF_HUB_DISABLE_XET: "1"
+    steps:
+      - name: Checkout repository anonymously
+        run: |
+          git init .
+          git remote add origin https://github.com/${{ github.repository }}.git
+          git fetch --depth=1 origin ${{ github.sha }}
+          git checkout --detach FETCH_HEAD
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+
+      - name: Cache Hespi model downloads
+        uses: actions/cache@v5
+        with:
+          path: ~/.cache/hespi
+          key: hespi-0.6.2-${{ runner.os }}
+
+      - name: Cache Hugging Face TrOCR base model
+        uses: actions/cache@v5
+        with:
+          path: ~/.cache/huggingface
+          key: trocr-base-handwritten-${{ runner.os }}-v1
+
+      - name: Install OCR dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y tesseract-ocr
+          python -m pip install --upgrade pip
+          python -m pip install -e '.[dev,hespi]'
+
+      - name: Check DeepSeek configuration
+        run: |
+          test -n "$DEEPSEEK_API_KEY"
+          echo "DeepSeek official key present; value is not printed."
+
+      - name: Run tests
+        run: python -m pytest
+
+      - name: Build validated shared image set
+        run: python scripts/prepare_hespi_v2_paired_eval.py
+
+      - name: Run filtered TrOCR base eval10
+        run: python scripts/run_pipeline.py --config configs/hespi_v10_eval10_htr_base_filtered.yaml
+
+      - name: Build comparison report and review bundle
+        env:
+          HESPI_HTR_DATA_DIR: data/experiments/hespi_v10_eval10
+          HESPI_HTR_REPORT_DIR: reports/hespi_v10_eval10
+          HESPI_HTR_METHOD: deepseek_v4_pro_nonthinking_htr_base_filtered
+          HESPI_HTR_REPORT_PREFIX: hespi_v10
+          HESPI_HTR_REPORT_TITLE: Hespi v10 Eval10 Filtered TrOCR Base Report
+          HESPI_HTR_MODEL_LABEL: TrOCR-base
+          HESPI_HTR_OUTPUTS_NAME: hespi_v10_eval10_outputs.jsonl
+        run: |
+          python scripts/report_hespi_v8_eval10.py
+          python scripts/build_hespi_v4_review_bundle.py \
+            --processed-dir data/experiments/hespi_v10_eval10/processed \
+            --output-dir reports/hespi_v10_eval10/review_bundle
+
+      - name: Verify eval10 outputs
+        run: |
+          python - <<'PY'
+          import json
+          from pathlib import Path
+          import pandas as pd
+
+          root = Path("data/experiments/hespi_v10_eval10")
+          eval_set = pd.read_csv(root / "processed/eval_set.csv", dtype=str).fillna("")
+          rows = [
+              json.loads(line)
+              for line in (root / "interim/llm/hespi_v10_eval10_outputs.jsonl").read_text(encoding="utf-8").splitlines()
+              if line.strip()
+          ]
+          parsed = [
+              row for row in rows
+              if row.get("raw_output") and row.get("parse_failure") is False and not row.get("not_evaluated")
+          ]
+          ocr = pd.read_csv(root / "processed/ocr_by_region.csv", dtype=str).fillna("")
+          htr = ocr[
+              ocr["occurrenceID"].isin(set(eval_set["occurrenceID"]))
+              & ocr["ocr_engine"].str.startswith("hespi_trocr_base")
+          ]
+          accepted = htr["htr_prompt_accepted"].str.lower().eq("true")
+          if len(eval_set) != 10 or len(parsed) != 10:
+              raise SystemExit(f"Expected 10 EVAL and parsed records; got {len(eval_set)} and {len(parsed)}")
+          if len(htr) < 10 or not accepted.any():
+              raise SystemExit(f"Missing usable HTR evidence: rows={len(htr)}, accepted={accepted.sum()}")
+          report = Path("reports/hespi_v10_eval10/hespi_v10_improvement_report.md")
+          if not report.exists():
+              raise SystemExit("Missing Hespi v10 comparison report")
+          print({"eval_n": len(eval_set), "parsed_n": len(parsed), "htr_n": len(htr), "accepted_n": int(accepted.sum())})
+          PY
+
+      - name: Upload eval10 outputs
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: herbarium-scribe-hespi-v10-eval10-${{ github.run_id }}
+          retention-days: 30
+          path: |
+            data/experiments/hespi_v2_shared/processed/
+            data/experiments/hespi_v10_eval10/processed/
+            data/experiments/hespi_v10_eval10/interim/hespi_lite/
+            data/experiments/hespi_v10_eval10/interim/ocr/
+            data/experiments/hespi_v10_eval10/interim/llm/
+            reports/hespi_v10_eval10/
