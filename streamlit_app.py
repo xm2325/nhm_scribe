@@ -1,9 +1,10 @@
 from __future__ import annotations
 
+import hashlib
 import io
 import json
 import os
-import hashlib
+import re
 import sys
 import tempfile
 import zipfile
@@ -27,6 +28,8 @@ from herbarium_scribe.rag import build_rag_corpus, format_context_for_prompt, re
 from herbarium_scribe.schema import EXTRACTION_FIELDS, flatten_record, validate_record
 
 APP_BUNDLE = ROOT / "app_data" / "real_eval_100_streamlit_bundle.zip"
+HESPI_V10_REPORT = ROOT / "app_data" / "hespi_v10_ocr_visual_report.zip"
+HESPI_REPORT_DIR = "hespi_v10_ocr_visual_report"
 LOCAL_PROCESSED = ROOT / "data" / "processed"
 LOCAL_LLM = ROOT / "data" / "interim" / "llm"
 THUMB_PREFIX = "app_data/thumbnails/real_eval_100"
@@ -41,6 +44,168 @@ def clean(value: Any) -> str:
     text = str(value).strip()
     return "" if text.lower() in {"nan", "none", "null"} else text
 
+
+# -----------------------------------------------------------------------------
+# Hespi v10 report home page
+# -----------------------------------------------------------------------------
+
+def hespi_normalise_identifier(value: str) -> str:
+    return re.sub(r"[^a-z0-9]", "", value.lower())
+
+
+@st.cache_data(show_spinner=False)
+def hespi_zip_names(path: str) -> list[str]:
+    if not Path(path).exists():
+        return []
+    with zipfile.ZipFile(path) as zf:
+        return zf.namelist()
+
+
+@st.cache_data(show_spinner=False)
+def hespi_read_csv(path: str, filename: str) -> pd.DataFrame:
+    member = f"{HESPI_REPORT_DIR}/{filename}"
+    with zipfile.ZipFile(path) as zf:
+        with zf.open(member) as fh:
+            return pd.read_csv(fh, dtype=str).fillna("")
+
+
+@st.cache_data(show_spinner=False)
+def hespi_read_bytes(path: str, member: str) -> bytes:
+    with zipfile.ZipFile(path) as zf:
+        return zf.read(member)
+
+
+def hespi_find_overview_member(path: str, catalog_number: str) -> str:
+    target = hespi_normalise_identifier(catalog_number)
+    for member in hespi_zip_names(path):
+        if "/assets/overviews/" not in member or not member.lower().endswith((".jpg", ".jpeg", ".png")):
+            continue
+        stem = Path(member).stem
+        if stem.endswith("_00"):
+            stem = stem[:-3]
+        if hespi_normalise_identifier(stem) == target:
+            return member
+    return ""
+
+
+def hespi_crop_members(path: str, catalog_number: str) -> list[str]:
+    target = hespi_normalise_identifier(catalog_number)
+    members: list[str] = []
+    for member in hespi_zip_names(path):
+        if "/assets/crops/" not in member or not member.lower().endswith((".jpg", ".jpeg", ".png")):
+            continue
+        stem = Path(member).stem
+        if hespi_normalise_identifier(stem).startswith(target):
+            members.append(member)
+    return sorted(members)
+
+
+def hespi_render_image(path: str, member: str, caption: str | None = None) -> None:
+    image = Image.open(io.BytesIO(hespi_read_bytes(path, member)))
+    st.image(image, caption=caption, use_container_width=True)
+
+
+def hespi_record_order(detail: pd.DataFrame, path: str) -> list[str]:
+    if detail.empty or "catalogNumber" not in detail.columns:
+        return []
+    records = [clean(value) for value in detail["catalogNumber"].drop_duplicates().tolist() if clean(value)]
+    return sorted(records, key=lambda catalog: (not bool(hespi_find_overview_member(path, catalog)), catalog.lower()))
+
+
+def hespi_display_summary_tables(path: str) -> None:
+    field_metrics = hespi_read_csv(path, "field_metrics.csv")
+    htr_summary = hespi_read_csv(path, "htr_engine_summary.csv")
+
+    st.subheader("Evaluation summary")
+    st.caption("Field-level extraction metrics for the ten-record Hespi v10 evaluation.")
+    st.dataframe(field_metrics, use_container_width=True, hide_index=True)
+
+    st.subheader("OCR / HTR engine comparison")
+    st.caption("Component-level match rate and non-empty output rate for collector and date regions.")
+    st.dataframe(htr_summary, use_container_width=True, hide_index=True)
+
+
+def hespi_display_record(path: str, catalog_number: str, detail: pd.DataFrame) -> None:
+    rows = detail[detail["catalogNumber"].astype(str) == catalog_number].copy()
+    overview = hespi_find_overview_member(path, catalog_number)
+    crops = hespi_crop_members(path, catalog_number)
+
+    with st.container(border=True):
+        st.subheader(catalog_number)
+        occurrence_ids = [clean(value) for value in rows["occurrenceID"].drop_duplicates().tolist() if clean(value)]
+        if occurrence_ids:
+            st.caption(occurrence_ids[0])
+
+        image_col, table_col = st.columns([0.9, 1.6])
+        with image_col:
+            if overview:
+                hespi_render_image(path, overview, "Annotated overview")
+            else:
+                st.info("No annotated overview thumbnail is available for this record.")
+        with table_col:
+            columns = [
+                "region_type",
+                "ocr_engine",
+                "ocr_text",
+                "ocr_status",
+                "htr_prompt_accepted",
+                "htr_prompt_reason",
+                "gold_recordedBy",
+                "gold_eventDate",
+                "final_recordedBy",
+                "final_eventDate",
+                "final_catalogNumber",
+            ]
+            visible = [column for column in columns if column in rows.columns]
+            st.dataframe(rows[visible], use_container_width=True, hide_index=True)
+
+        if crops:
+            with st.expander(f"OCR-focused crop images ({len(crops)})", expanded=False):
+                for start in range(0, len(crops), 4):
+                    cols = st.columns(4)
+                    for col, member in zip(cols, crops[start : start + 4]):
+                        with col:
+                            hespi_render_image(path, member, Path(member).name)
+
+
+def show_hespi_v10_home(report_zip: Path) -> None:
+    st.title("Herbarium SCRIBE")
+    st.caption(
+        "Hespi v10 ten-record OCR visual evaluation: annotated regions, OCR-focused crops, "
+        "OCR / HTR outputs, and final extraction review."
+    )
+
+    if not report_zip.exists():
+        st.error(f"Missing report bundle: {report_zip}")
+        st.info("Upload app_data/hespi_v10_ocr_visual_report.zip to display the Hespi v10 results.")
+        return
+
+    detail = hespi_read_csv(str(report_zip), "ocr_focus_detail.csv")
+    records = hespi_record_order(detail, str(report_zip))
+    with_thumbnail = sum(bool(hespi_find_overview_member(str(report_zip), record)) for record in records)
+
+    cols = st.columns(4)
+    cols[0].metric("EVAL records", len(records))
+    cols[1].metric("Annotated overviews", with_thumbnail)
+    cols[2].metric("Records without overview", len(records) - with_thumbnail)
+    cols[3].metric("OCR detail rows", len(detail))
+
+    contact_sheet = f"{HESPI_REPORT_DIR}/contact_sheet.jpg"
+    if contact_sheet in hespi_zip_names(str(report_zip)):
+        with st.expander("Contact sheet", expanded=True):
+            hespi_render_image(str(report_zip), contact_sheet, "Hespi v10 OCR visual report")
+
+    hespi_display_summary_tables(str(report_zip))
+
+    st.subheader("Record-level visual review")
+    st.caption("Records with annotated overview thumbnails are shown first. Records without thumbnails are placed at the end.")
+    for record in records:
+        hespi_display_record(str(report_zip), record, detail)
+
+
+# -----------------------------------------------------------------------------
+# Existing 100-record evaluation browser
+# -----------------------------------------------------------------------------
 
 @st.cache_data(show_spinner=False)
 def zip_names(path: str) -> list[str]:
@@ -419,7 +584,6 @@ def show_image_gallery(data: dict[str, Any]) -> None:
                 )
 
 
-
 def show_overview(data: dict[str, Any]) -> None:
     st.title("Herbarium SCRIBE")
     st.caption("Interactive browser for the real-image OCR + DeepSeek + RAG evaluation.")
@@ -635,10 +799,12 @@ def main() -> None:
     st.sidebar.caption(f"Data: {data['source']}")
     page = st.sidebar.radio(
         "View",
-        ["Pipeline Review", "Image Gallery", "Overview", "Record Explorer", "LLM/RAG Trace", "Live Upload"],
+        ["Hespi v10 Results", "Pipeline Review", "Image Gallery", "Overview", "Record Explorer", "LLM/RAG Trace", "Live Upload"],
         key="page",
     )
-    if page == "Overview":
+    if page == "Hespi v10 Results":
+        show_hespi_v10_home(HESPI_V10_REPORT)
+    elif page == "Overview":
         show_overview(data)
     elif page == "Pipeline Review":
         show_pipeline_review(data)
