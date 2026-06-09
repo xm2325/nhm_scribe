@@ -270,13 +270,30 @@ def build_report(
     llm_diagnostics: list[dict[str, Any]],
 ) -> None:
     image_success = int(manifest["image_path"].astype(str).ne("").sum())
+    requested_models = sorted({
+        clean_str(item.get("requested_model"))
+        for item in llm_diagnostics
+        if clean_str(item.get("requested_model"))
+    })
+    actual_models = sorted({
+        clean_str(item.get("actual_model"))
+        for item in llm_diagnostics
+        if clean_str(item.get("actual_model"))
+    })
+    parsed_calls = sum(item.get("llm_status") == "parsed" for item in llm_diagnostics)
+    not_evaluated_calls = sum(
+        item.get("llm_status") != "parsed" for item in llm_diagnostics
+    )
     lines = [
         "# Component-Aware Herbarium Eval10 Report",
         "",
         f"- Frozen EVAL records: `{len(eval_df)}`",
         f"- Images available: `{image_success}`",
-        f"- LLM parsed calls: `{sum(item.get('llm_status') == 'parsed' for item in llm_diagnostics)}`",
-        f"- LLM not evaluated / failed calls: `{sum(item.get('llm_status') != 'parsed' for item in llm_diagnostics)}`",
+        f"- LLM calls represented: `{len(llm_diagnostics)}`",
+        f"- LLM parsed calls: `{parsed_calls}`",
+        f"- LLM not evaluated / failed calls: `{not_evaluated_calls}`",
+        f"- Requested model names: `{', '.join(requested_models) or 'not available'}`",
+        f"- Actual model names returned: `{', '.join(actual_models) or 'not available'}`",
         f"- Retrieval rows: `{len(retrieval)}`",
         "- RAG references are support context only and exclude every EVAL occurrenceID.",
         "- Identifier-component recall is a detection proxy, not ground-truth object-detection recall.",

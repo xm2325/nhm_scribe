@@ -531,6 +531,12 @@ def reconcile_with_optional_llm(
     retrieval_context: list[dict[str, Any]] | None = None,
 ) -> tuple[dict[str, Any], dict[str, Any]]:
     deterministic = deterministic_reconciliation(packet)
+    if not evidence_packet_text(packet).strip():
+        return deterministic, {
+            "llm_status": "not_evaluated",
+            "not_evaluated_reason": "empty_component_evidence",
+            "raw_output": "",
+        }
     if clean_str(cfg.get("llm", {}).get("backend", "none")).lower() == "none":
         return deterministic, {
             "llm_status": "not_evaluated",

@@ -8,6 +8,7 @@ import pytest
 from herbarium_scribe.component_aware import (
     build_evidence_packets,
     direct_evidence_packet,
+    reconcile_with_optional_llm,
     resolve_catalog_number,
     validate_reconciled_record,
 )
@@ -140,6 +141,23 @@ def test_whole_sheet_is_only_used_when_component_evidence_is_empty():
     direct = direct_evidence_packet(packet)
     assert [item["region_id"] for item in direct["components"]] == ["number"]
     assert direct["whole_sheet_fallback_used"] is False
+
+
+def test_empty_component_evidence_skips_llm_call():
+    record, meta = reconcile_with_optional_llm(
+        {
+            "occurrenceID": "eval:1",
+            "components": [{
+                "region_id": "eval:1::number",
+                "component_type": "number",
+                "readings": [{"engine": "tesseract", "raw_text": ""}],
+            }],
+        },
+        {"llm": {"backend": "qwen_api"}},
+    )
+    assert meta["llm_status"] == "not_evaluated"
+    assert meta["not_evaluated_reason"] == "empty_component_evidence"
+    assert record["catalogNumber"]["value"] == ""
 
 
 def test_review_bundle_csv_and_jsonl_loading(tmp_path: Path):
