@@ -1,1 +1,1 @@
-Run the frozen eval10 Qwen primary-label vision comparison.
+Run the frozen eval10 Qwen primary-label vision comparison with fail-fast diagnostics.

@@ -1,7 +1,14 @@
+import io
 import urllib.error
 import json
 
-from herbarium_scribe.llm_backends import call_llm, call_llm_with_metadata, _chat_completions_request, _provider_http_error
+from herbarium_scribe.llm_backends import (
+    _chat_completions_request,
+    _http_error_detail,
+    _provider_http_error,
+    call_llm,
+    call_llm_with_metadata,
+)
 
 
 def test_qwen_api_without_key_returns_empty(monkeypatch):
@@ -97,6 +104,18 @@ def test_provider_http_error_does_not_include_key_fragments():
     msg = _provider_http_error("NVIDIA", 401)
     assert "authentication_error" in msg
     assert "nvapi" not in msg.lower()
+    assert "permission_error" in _provider_http_error("Qwen", 403)
+
+
+def test_http_error_detail_preserves_provider_message():
+    error = urllib.error.HTTPError(
+        "https://example.test",
+        403,
+        "forbidden",
+        {},
+        io.BytesIO(b'{"error":{"code":"AccessDenied","message":"model permission missing"}}'),
+    )
+    assert _http_error_detail(error) == "AccessDenied | model permission missing"
 
 
 def test_chat_completions_retries_429_with_retry_after(monkeypatch):

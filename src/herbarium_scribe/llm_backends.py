@@ -14,11 +14,40 @@ _LAST_REQUEST_AT: dict[str, float] = {}
 
 
 def _provider_http_error(provider: str, code: int) -> str:
-    if code in {401, 403}:
-        return f"{provider} API backend failed with HTTP {code} authentication_error. The configured API key was rejected."
+    if code == 401:
+        return f"{provider} API backend failed with HTTP 401 authentication_error. The configured API key was rejected."
+    if code == 403:
+        return (
+            f"{provider} API backend failed with HTTP 403 permission_error. "
+            "The key may be valid but lacks permission for this endpoint, model, or input type."
+        )
     if code == 429:
         return f"{provider} API backend failed with HTTP 429 rate_limit. The request was rate limited."
     return f"{provider} API backend failed with HTTP {code} provider_error. See provider dashboard or logs."
+
+
+def _http_error_detail(error: urllib.error.HTTPError) -> str:
+    try:
+        body = error.read().decode("utf-8", errors="replace").strip()
+    except Exception:
+        return ""
+    if not body:
+        return ""
+    try:
+        parsed = json.loads(body)
+        if isinstance(parsed, dict):
+            candidate = parsed.get("error", parsed)
+            if isinstance(candidate, dict):
+                parts = [
+                    str(candidate.get(key, "") or "").strip()
+                    for key in ("code", "type", "message", "request_id")
+                ]
+                detail = " | ".join(part for part in parts if part)
+                if detail:
+                    return detail[:1200]
+    except json.JSONDecodeError:
+        pass
+    return body[:1200]
 
 
 def _float_value(value: Any, default: float = 0.0) -> float:
@@ -269,7 +298,10 @@ def call_llm_with_metadata(messages: list[dict[str, Any]], config: dict[str, Any
             base["endpoint_reachable"] = True
             return base
         except urllib.error.HTTPError as e:
+            detail = _http_error_detail(e)
             msg = _provider_http_error("Qwen", e.code)
+            if detail:
+                msg = f"{msg} Provider response: {detail}"
             logger.warning(msg)
             base.update({"error_message": msg, "endpoint_reachable": True})
             return base

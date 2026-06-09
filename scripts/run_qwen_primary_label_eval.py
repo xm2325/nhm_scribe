@@ -88,6 +88,7 @@ def write_report(
     primary_count: int,
     parsed_count: int,
     model_probe: dict[str, Any],
+    preflight: dict[str, Any],
     requested_model: str,
     actual_models: list[str],
     detail: pd.DataFrame,
@@ -124,6 +125,8 @@ def write_report(
         f"- Model endpoint reachable: `{model_probe.get('reachable')}`\n",
         f"- Models endpoint error: `{model_probe.get('error', '')}`\n",
         f"- Models advertised by endpoint: `{', '.join(model_probe.get('models', []))}`\n",
+        f"- Text-chat preflight actual model: `{preflight.get('actual_model', '')}`\n",
+        f"- Text-chat preflight error: `{preflight.get('error_message', '')}`\n",
         "\n## Overall result\n",
         markdown_table(overall),
         "\n\n## Field result\n",
@@ -202,12 +205,38 @@ def main() -> None:
     if not api_key:
         raise SystemExit("QWEN_API_KEY is not set.")
     model_probe = query_models(base_url, api_key)
-    (paths["processed"] / "qwen_model_probe.json").write_text(
+    model_probe_path = paths["processed"] / "qwen_model_probe.json"
+    model_probe_path.write_text(
         json.dumps(model_probe, ensure_ascii=False, indent=2),
         encoding="utf-8",
     )
     call_cfg = {"llm": dict(vision_cfg)}
     call_cfg["llm"]["backend"] = "qwen_api"
+    preflight_meta = call_llm_with_metadata(
+        [{
+            "role": "user",
+            "content": (
+                "Return exactly this JSON object to verify text chat access: "
+                '{"status":"ok","capability":"text_chat"}'
+            ),
+        }],
+        call_cfg,
+    )
+    preflight = {
+        "requested_model": preflight_meta.get("requested_model", requested_model),
+        "actual_model": preflight_meta.get("actual_model", ""),
+        "content": clean_str(preflight_meta.get("content")),
+        "finish_reason": preflight_meta.get("finish_reason", ""),
+        "usage": preflight_meta.get("usage", {}),
+        "error_message": preflight_meta.get("error_message", ""),
+        "response_body": preflight_meta.get("response", {}),
+    }
+    preflight_path = paths["processed"] / "qwen_text_chat_preflight.json"
+    preflight_path.write_text(
+        json.dumps(preflight, ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
+    provider_blocker = clean_str(preflight["error_message"])
 
     ocr_primary = ocr[
         ocr["occurrenceID"].isin(eval_ids)
@@ -245,6 +274,16 @@ def main() -> None:
                 "requested_model": requested_model,
                 "raw_output": "",
                 "parsed_json": None,
+            })
+            continue
+        if provider_blocker:
+            outputs.append({
+                "occurrenceID": occurrence_id,
+                "status": "skipped_after_preflight_error",
+                "requested_model": requested_model,
+                "raw_output": "",
+                "parsed_json": None,
+                "error_message": provider_blocker,
             })
             continue
         messages, image_meta = primary_label_vision_messages(
@@ -286,6 +325,8 @@ def main() -> None:
             "response_body": meta.get("response", {}),
         }
         outputs.append(item)
+        if "HTTP 401" in clean_str(item["error_message"]) or "HTTP 403" in clean_str(item["error_message"]):
+            provider_blocker = clean_str(item["error_message"])
         if not parsed:
             continue
         record = validate_record(parsed["fields"])
@@ -367,6 +408,7 @@ def main() -> None:
         primary_count=primary["occurrenceID"].nunique(),
         parsed_count=len(prediction_df),
         model_probe=model_probe,
+        preflight=preflight,
         requested_model=requested_model,
         actual_models=actual_models,
         detail=detail,
@@ -377,7 +419,15 @@ def main() -> None:
         paths["reports"],
         outputs,
         crop_rows,
-        [prediction_path, detail_path, summary_path, manifest_path, report_path],
+        [
+            prediction_path,
+            detail_path,
+            summary_path,
+            manifest_path,
+            model_probe_path,
+            preflight_path,
+            report_path,
+        ],
     )
     print({
         "eval_records": len(eval_set),
