@@ -98,12 +98,132 @@ def _safe_gbif_name(
     return accepted, accepted != original
 
 
+def _catalog_key(value: str) -> str:
+    return re.sub(r"[^A-Za-z0-9]+", "", clean_str(value)).upper()
+
+
+def _safe_catalog_extension(
+    original: str,
+    candidates: list[dict[str, Any]],
+    max_extension_chars: int = 4,
+) -> tuple[str, bool, str]:
+    original = clean_str(original)
+    original_key = _catalog_key(original)
+    if not original_key:
+        return original, False, "not_provided"
+    if not re.fullmatch(r"[A-Z]{1,4}\d{4,14}", original_key):
+        return original, False, "original_not_structured"
+    matches: dict[str, str] = {}
+    for item in candidates:
+        value = clean_str(item.get("value", ""))
+        key = _catalog_key(value)
+        extension_length = len(key) - len(original_key)
+        if not 1 <= extension_length <= max(1, int(max_extension_chars)):
+            continue
+        if not key.startswith(original_key):
+            continue
+        if not re.fullmatch(r"[A-Z]{1,4}\d{6,14}", key):
+            continue
+        matches.setdefault(key, value)
+    if len(matches) != 1:
+        return original, False, "ambiguous_extension" if matches else "no_safe_extension"
+    return next(iter(matches.values())), True, "strict_extension_applied"
+
+
+def _catalog_candidates_by_occurrence(
+    paths: dict[str, Path] | None,
+) -> dict[str, list[dict[str, Any]]]:
+    if not paths:
+        return {}
+    ocr_path = paths["processed"] / "ocr_by_region.csv"
+    if not ocr_path.exists():
+        return {}
+    ocr = pd.read_csv(ocr_path, dtype=str).fillna("")
+    if "ocr_engine" not in ocr.columns:
+        return {}
+    ensemble = ocr[
+        ocr["ocr_engine"].astype(str).eq("tesseract_catalog_number_ensemble")
+    ]
+    by_occurrence: dict[str, dict[str, dict[str, Any]]] = {}
+    for _, row in ensemble.iterrows():
+        occurrence_id = clean_str(row.get("occurrenceID", ""))
+        if not occurrence_id:
+            continue
+        items = []
+        raw_json = clean_str(row.get("ocr_ensemble_candidates_json", ""))
+        if raw_json:
+            try:
+                parsed = json.loads(raw_json)
+                items = parsed if isinstance(parsed, list) else []
+            except Exception:
+                items = []
+        if not items:
+            items = [
+                {"value": value}
+                for value in str(row.get("ocr_text", "")).splitlines()
+                if clean_str(value)
+            ]
+        occurrence_items = by_occurrence.setdefault(occurrence_id, {})
+        for item in items:
+            value = clean_str(item.get("value", ""))
+            key = _catalog_key(value)
+            if not key:
+                continue
+            existing = occurrence_items.setdefault(
+                key,
+                {
+                    "value": value,
+                    "normalised": key,
+                    "votes": 0,
+                    "score": 0,
+                    "sources": [],
+                },
+            )
+            existing["votes"] = max(
+                int(existing.get("votes", 0) or 0),
+                int(item.get("votes", 0) or 0),
+            )
+            existing["score"] = max(
+                float(existing.get("score", 0) or 0),
+                float(item.get("score", 0) or 0),
+            )
+            for source in item.get("sources", []) or []:
+                if source not in existing["sources"]:
+                    existing["sources"].append(source)
+    return {
+        occurrence_id: sorted(
+            items.values(),
+            key=lambda item: (-float(item["score"]), -int(item["votes"]), item["normalised"]),
+        )
+        for occurrence_id, items in by_occurrence.items()
+    }
+
+
 def reconcile_row(
     row: pd.Series,
     config: dict[str, Any] | None = None,
     gbif_cache: dict[str, Any] | None = None,
+    catalog_candidates: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     config = config or {}
+    catalog_candidates = catalog_candidates or []
+    catalog_verbatim = clean_str(row.get("catalogNumber", ""))
+    catalog_resolved = catalog_verbatim
+    catalog_corrected = False
+    catalog_status = "disabled"
+    catalog_methods = set(config.get("catalog_number_resolver_methods", []))
+    catalog_method_allowed = (
+        not catalog_methods
+        or clean_str(row.get("method", "")) in catalog_methods
+    )
+    if bool(config.get("use_catalog_number_resolver", False)) and catalog_method_allowed:
+        catalog_resolved, catalog_corrected, catalog_status = _safe_catalog_extension(
+            catalog_verbatim,
+            catalog_candidates,
+            int(config.get("catalog_number_max_extension_chars", 4)),
+        )
+    elif bool(config.get("use_catalog_number_resolver", False)):
+        catalog_status = "not_enabled_for_method"
     verbatim = clean_str(row.get("scientificName", ""))
     resolved = verbatim
     gbif_match: dict[str, Any] = {}
@@ -134,6 +254,16 @@ def reconcile_row(
     warning = "" if canonical or not verbatim else "taxonomy_unmatched"
     country = normalise_country(row.get("country", ""))
     return {
+        "catalogNumber_resolved": catalog_resolved,
+        "catalogNumber_verbatim": catalog_verbatim,
+        "catalog_number_resolution_status": catalog_status,
+        "catalog_number_correction_applied": catalog_corrected,
+        "catalog_number_candidate_count": len(catalog_candidates),
+        "catalog_number_candidates": " | ".join(
+            clean_str(item.get("value", ""))
+            for item in catalog_candidates
+            if clean_str(item.get("value", ""))
+        ),
         "scientificName_resolved": resolved,
         "scientificName_verbatim": verbatim,
         "scientificName_canonical": canonical,
@@ -164,11 +294,43 @@ def reconcile_dataframe(
         else ((paths["processed"] / "gbif_match_cache.json") if paths else Path("gbif_match_cache.json"))
     )
     gbif_cache = _load_cache(cache_path)
+    catalog_candidates = (
+        _catalog_candidates_by_occurrence(paths)
+        if bool(rec_config.get("use_catalog_number_resolver", False))
+        else {}
+    )
     rows = []
     for _, row in pred_df.iterrows():
-        rows.append(reconcile_row(row, rec_config, gbif_cache))
+        rows.append(
+            reconcile_row(
+                row,
+                rec_config,
+                gbif_cache,
+                catalog_candidates.get(clean_str(row.get("occurrenceID", "")), []),
+            )
+        )
     enrichment = pd.DataFrame(rows)
     rec = pd.concat([pred_df.reset_index(drop=True), enrichment], axis=1)
+    if "catalogNumber_resolved" in rec.columns:
+        corrected = rec["catalog_number_correction_applied"].astype(bool)
+        rec.loc[corrected, "catalogNumber"] = rec.loc[corrected, "catalogNumber_resolved"]
+        if "catalogNumber_evidence_span" in rec.columns:
+            rec.loc[corrected, "catalogNumber_evidence_span"] = rec.loc[
+                corrected,
+                "catalogNumber_resolved",
+            ]
+        if "catalogNumber_confidence" in rec.columns:
+            confidence = pd.to_numeric(
+                rec.loc[corrected, "catalogNumber_confidence"],
+                errors="coerce",
+            ).fillna(0.0)
+            resolved_confidence = confidence.clip(lower=0.85)
+            if pd.api.types.is_string_dtype(rec["catalogNumber_confidence"].dtype):
+                rec.loc[corrected, "catalogNumber_confidence"] = resolved_confidence.map(
+                    lambda value: f"{value:g}"
+                )
+            else:
+                rec.loc[corrected, "catalogNumber_confidence"] = resolved_confidence
     if "scientificName_resolved" in rec.columns:
         rec["scientificName"] = rec["scientificName_resolved"]
     if bool(rec_config.get("use_gbif_api", False)):
@@ -179,6 +341,12 @@ def reconcile_dataframe(
         columns = [
             "occurrenceID",
             "method",
+            "catalogNumber_verbatim",
+            "catalogNumber_resolved",
+            "catalog_number_resolution_status",
+            "catalog_number_correction_applied",
+            "catalog_number_candidate_count",
+            "catalog_number_candidates",
             "scientificName_verbatim",
             "scientificName_resolved",
             "scientificName_canonical",

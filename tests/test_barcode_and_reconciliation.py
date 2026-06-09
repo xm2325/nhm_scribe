@@ -3,7 +3,11 @@ from pathlib import Path
 import pandas as pd
 
 from herbarium_scribe.ocr import rank_catalog_ocr_candidates, run_ocr
-from herbarium_scribe.reconcile import _safe_gbif_name, reconcile_dataframe
+from herbarium_scribe.reconcile import (
+    _safe_catalog_extension,
+    _safe_gbif_name,
+    reconcile_dataframe,
+)
 
 
 def test_catalog_ocr_candidates_are_deduplicated_and_ranked():
@@ -194,6 +198,80 @@ def test_safe_gbif_name_repairs_authorship_only():
     )
     assert unchanged == "Borleric se. 8 Somos a"
     assert applied is False
+
+
+def test_safe_catalog_extension_repairs_only_unique_structured_truncation():
+    resolved, applied, status = _safe_catalog_extension(
+        "BM0006253",
+        [
+            {"value": "BM000625315"},
+            {"value": "BMBNbez5375"},
+            {"value": "6000625315"},
+        ],
+    )
+    assert resolved == "BM000625315"
+    assert applied is True
+    assert status == "strict_extension_applied"
+
+    resolved, applied, status = _safe_catalog_extension(
+        "BM0006253",
+        [
+            {"value": "BM000625314"},
+            {"value": "BM000625315"},
+        ],
+    )
+    assert resolved == "BM0006253"
+    assert applied is False
+    assert status == "ambiguous_extension"
+
+    resolved, applied, status = _safe_catalog_extension(
+        "",
+        [{"value": "L.2489324"}],
+    )
+    assert resolved == ""
+    assert applied is False
+    assert status == "not_provided"
+
+
+def test_reconcile_dataframe_applies_catalog_extension_from_ocr(tmp_path: Path):
+    pd.DataFrame([{
+        "occurrenceID": "eval:1",
+        "ocr_engine": "tesseract_catalog_number_ensemble",
+        "ocr_text": "BM000625315\nBMBNbez5375",
+        "ocr_ensemble_candidates_json": (
+            '[{"value":"BM000625315","votes":1,"score":14},'
+            '{"value":"BMBNbez5375","votes":1,"score":14}]'
+        ),
+    }]).to_csv(tmp_path / "ocr_by_region.csv", index=False)
+    frame = pd.DataFrame([{
+        "occurrenceID": "eval:1",
+        "method": "llm",
+        "catalogNumber": "BM0006253",
+        "catalogNumber_confidence": 0.9,
+        "catalogNumber_evidence_span": "BM0006253",
+        "scientificName": "",
+        "country": "",
+        "stateProvince": "",
+    }])
+    frame.to_csv(tmp_path / "predictions.csv", index=False)
+    frame = pd.read_csv(tmp_path / "predictions.csv", dtype=str).fillna("")
+
+    out = reconcile_dataframe(
+        frame,
+        {"processed": tmp_path},
+        {
+            "reconciliation": {
+                "use_catalog_number_resolver": True,
+                "catalog_number_resolver_methods": ["llm"],
+            }
+        },
+    )
+
+    row = out.iloc[0]
+    assert row["catalogNumber"] == "BM000625315"
+    assert row["catalogNumber_verbatim"] == "BM0006253"
+    assert row["catalogNumber_evidence_span"] == "BM000625315"
+    assert bool(row["catalog_number_correction_applied"]) is True
 
 
 def test_reconcile_dataframe_applies_audited_gbif_correction(tmp_path: Path, monkeypatch):

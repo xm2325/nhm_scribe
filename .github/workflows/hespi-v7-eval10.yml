@@ -1,0 +1,122 @@
+name: Hespi v7 eval10 conservative catalog resolver
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - .github/run-hespi-v7-eval10.trigger
+  workflow_dispatch:
+
+jobs:
+  eval10:
+    runs-on: ubuntu-latest
+    timeout-minutes: 240
+    env:
+      DEEPSEEK_API_KEY: ${{ secrets.DEEPSEEK_API_KEY_SELF }}
+      DEEPSEEK_BASE_URL: https://api.deepseek.com
+      DEEPSEEK_MODEL: deepseek-v4-pro
+      DEEPSEEK_MIN_INTERVAL_SECONDS: "1.0"
+    steps:
+      - name: Checkout repository anonymously
+        run: |
+          git init .
+          git remote add origin https://github.com/${{ github.repository }}.git
+          git fetch --depth=1 origin ${{ github.sha }}
+          git checkout --detach FETCH_HEAD
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+
+      - name: Cache Hespi model downloads
+        uses: actions/cache@v5
+        with:
+          path: ~/.cache/hespi
+          key: hespi-0.6.2-${{ runner.os }}
+
+      - name: Install OCR system dependency
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y tesseract-ocr
+
+      - name: Install package with Hespi
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -e '.[dev,hespi]'
+
+      - name: Check DeepSeek official API configuration
+        run: |
+          if [ -z "${DEEPSEEK_API_KEY}" ]; then
+            echo "::error::Repository secret DEEPSEEK_API_KEY_SELF is not configured"
+            exit 1
+          fi
+
+      - name: Run tests
+        run: python -m pytest
+
+      - name: Build validated shared image set
+        run: |
+          mkdir -p reports/hespi_v7_eval10
+          set -o pipefail
+          python scripts/prepare_hespi_v2_paired_eval.py 2>&1 | tee reports/hespi_v7_eval10/acquisition.log
+
+      - name: Run conservative catalog resolver eval10
+        run: python scripts/run_pipeline.py --config configs/hespi_v7_eval10_catalog_resolver.yaml
+
+      - name: Build improvement report and review bundle
+        run: |
+          python scripts/report_hespi_v7_eval10.py
+          python scripts/build_hespi_v4_review_bundle.py \
+            --processed-dir data/experiments/hespi_v7_eval10/processed \
+            --output-dir reports/hespi_v7_eval10/review_bundle
+
+      - name: Verify eval10 outputs
+        run: |
+          python - <<'PY'
+          import json
+          from pathlib import Path
+          import pandas as pd
+
+          root = Path("data/experiments/hespi_v7_eval10")
+          eval_set = pd.read_csv(root / "processed/eval_set.csv", dtype=str).fillna("")
+          if len(eval_set) != 10:
+              raise SystemExit(f"Expected 10 EVAL records, got {len(eval_set)}")
+          rows = [
+              json.loads(line)
+              for line in (root / "interim/llm/hespi_v7_eval10_outputs.jsonl").read_text(encoding="utf-8").splitlines()
+              if line.strip()
+          ]
+          parsed = [
+              row for row in rows
+              if row.get("raw_output") and row.get("parse_failure") is False and not row.get("not_evaluated")
+          ]
+          if len(parsed) != 10:
+              raise SystemExit(f"Expected 10 parsed records, got {len(parsed)}")
+          reconciled = pd.read_csv(root / "processed/extractions_flat_reconciled.csv", dtype=str).fillna("")
+          corrected = reconciled[
+              reconciled["catalog_number_correction_applied"].astype(str).str.lower().isin({"true", "1"})
+          ]
+          if corrected.empty:
+              raise SystemExit("Expected at least one audited catalog-number correction")
+          final_predictions = root / "processed/hespi_v7_eval10_predictions_deepseek_catalog_resolver_reconciled.csv"
+          if not final_predictions.exists():
+              raise SystemExit("Missing reconciled final prediction CSV")
+          report = Path("reports/hespi_v7_eval10/hespi_v7_improvement_report.md")
+          if not report.exists():
+              raise SystemExit("Missing Hespi v7 improvement report")
+          print(report)
+          PY
+
+      - name: Upload eval10 outputs
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: herbarium-scribe-hespi-v7-eval10-${{ github.run_id }}
+          retention-days: 30
+          path: |
+            data/experiments/hespi_v2_shared/processed/
+            data/experiments/hespi_v7_eval10/processed/
+            data/experiments/hespi_v7_eval10/interim/ocr/
+            data/experiments/hespi_v7_eval10/interim/llm/
+            reports/hespi_v7_eval10/

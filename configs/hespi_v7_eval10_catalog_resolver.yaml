@@ -1,0 +1,23 @@
+extends: configs/hespi_v6_eval10_number_ensemble.yaml
+method_name: deepseek_v4_pro_nonthinking_catalog_resolver
+paths:
+  data_dir: data/experiments/hespi_v7_eval10
+  reports_dir: reports/hespi_v7_eval10
+experiment:
+  title: "Hespi v7 Eval10: Conservative Catalog Resolver"
+reconciliation:
+  use_catalog_number_resolver: true
+  catalog_number_resolver_methods:
+    - deepseek_v4_pro_nonthinking_catalog_resolver
+  catalog_number_max_extension_chars: 4
+  gbif_methods:
+    - deepseek_v4_pro_nonthinking_catalog_resolver
+  gbif_cache_path: data/experiments/hespi_v7_eval10/processed/gbif_match_cache.json
+outputs:
+  prefix: hespi_v7_eval10
+  prediction_name: deepseek_catalog_resolver
+  llm_artifact_family: hespi_v7_eval10
+  llm_outputs_name: hespi_v7_eval10_outputs.jsonl
+  llm_diagnostics_name: hespi_v7_eval10_diagnostics.csv
+  llm_diagnostics_json_name: hespi_v7_eval10_diagnostics.json
+  report_name: hespi_v7_eval10_report.md

@@ -513,7 +513,17 @@ def stage_reconcile(config_path: str | Path) -> pd.DataFrame:
     cfg, paths = load_runtime(config_path)
     p = paths["processed"] / "extractions_flat.csv"
     pred = pd.read_csv(p, dtype=str).fillna("") if p.exists() else stage_extract(config_path)
-    return reconcile_dataframe(pred, paths, cfg)
+    out = reconcile_dataframe(pred, paths, cfg)
+    prediction_name = clean_str(cfg.get("outputs", {}).get("prediction_name", ""))
+    if prediction_name:
+        method_name = clean_str(cfg.get("method_name", ""))
+        selected = out[out["method"].astype(str).eq(method_name)] if method_name else out
+        selected.to_csv(
+            paths["processed"]
+            / f"{_output_prefix(cfg)}_predictions_{prediction_name}_reconciled.csv",
+            index=False,
+        )
+    return out
 
 
 def stage_evaluate(config_path: str | Path) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
