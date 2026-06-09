@@ -5,6 +5,7 @@ from pathlib import Path
 import pandas as pd
 import numpy as np
 import pytest
+from PIL import Image
 
 from herbarium_scribe.component_aware import (
     build_evidence_packets,
@@ -20,7 +21,10 @@ from herbarium_scribe.hespi_layout import (
 )
 from herbarium_scribe.rag import assert_no_rag_leakage
 from herbarium_scribe.review_bundle import read_bundle_csv, read_bundle_jsonl
-from scripts.run_component_aware_eval10 import normalized_mean_embedding
+from scripts.run_component_aware_eval10 import (
+    build_review_bundle,
+    normalized_mean_embedding,
+)
 
 
 def packet_with_identifiers() -> dict:
@@ -183,3 +187,48 @@ def test_review_bundle_csv_and_jsonl_loading(tmp_path: Path):
     rows = read_bundle_jsonl(archive_path, "evidence_packets.jsonl")
     assert frame.loc[0, "branch"] == "component_aware_no_rag"
     assert rows[0]["occurrenceID"] == "eval:1"
+
+
+def test_review_bundle_preserves_same_named_overviews(tmp_path: Path):
+    processed = tmp_path / "processed"
+    report_dir = tmp_path / "reports"
+    processed.mkdir()
+    report_dir.mkdir()
+    report_path = report_dir / "component_aware_eval10_report.md"
+    report_path.write_text("# Report\n", encoding="utf-8")
+    (processed / "branch_comparison.csv").write_text(
+        "branch,coverage\nbaseline_full_sheet,0\n",
+        encoding="utf-8",
+    )
+
+    component_rows = []
+    for index, catalog in enumerate(["A1", "B2"]):
+        source_dir = tmp_path / f"record_{index}"
+        source_dir.mkdir()
+        annotation = source_dir / "sheet_components_annotated.jpg"
+        crop = source_dir / "number.jpg"
+        Image.new("RGB", (20, 20), color=(index * 50, 20, 20)).save(annotation)
+        Image.new("RGB", (10, 10), color=(20, index * 50, 20)).save(crop)
+        component_rows.append({
+            "occurrenceID": f"eval:{index}",
+            "catalogNumber": catalog,
+            "region_id": f"eval:{index}::number",
+            "component_type": "number",
+            "annotation_path": str(annotation),
+            "crop_path": str(crop),
+        })
+
+    archive = build_review_bundle(
+        report_dir,
+        processed,
+        pd.DataFrame(component_rows),
+        report_path,
+    )
+    frame = read_bundle_csv(archive, "sheet_components.csv")
+    assert frame["review_overview_member"].nunique() == 2
+    with zipfile.ZipFile(archive) as bundle:
+        overview_names = [
+            name for name in bundle.namelist()
+            if "/assets/overviews/" in name
+        ]
+    assert len(overview_names) == 2
