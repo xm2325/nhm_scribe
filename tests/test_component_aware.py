@@ -10,11 +10,14 @@ from PIL import Image
 from herbarium_scribe.component_aware import (
     build_evidence_packets,
     direct_evidence_packet,
+    identifier_shape_score,
+    read_sheet_components,
     reconcile_with_optional_llm,
     resolve_catalog_number,
     validate_reconciled_record,
 )
 from herbarium_scribe.hespi_layout import (
+    _normalise_label,
     non_max_suppression,
     normalise_bbox,
     tile_bbox_to_full,
@@ -51,6 +54,25 @@ def test_bounding_boxes_are_valid_and_normalized():
     assert all(0 <= value <= 1 for value in normalized)
 
 
+def test_hespi_database_label_alias_is_canonical():
+    assert _normalise_label("full database label") == "database_label"
+
+
+def test_non_text_component_skips_ocr():
+    readings = read_sheet_components(
+        pd.DataFrame([{
+            "occurrenceID": "eval:1",
+            "catalogNumber": "A1",
+            "region_id": "eval:1::swatch",
+            "component_type": "swatch",
+            "crop_path": "/does/not/exist.jpg",
+        }]),
+        {"ocr": {}},
+    )
+    assert readings.loc[0, "engine"] == "not_applicable"
+    assert readings.loc[0, "ocr_status"] == "non_text_component_skipped"
+
+
 def test_tile_local_bbox_maps_to_full_sheet():
     assert tile_bbox_to_full([5, 10, 50, 70], [100, 200, 300, 400]) == [105, 210, 150, 270]
 
@@ -77,6 +99,47 @@ def test_catalog_number_prefers_decoded_barcode():
     resolved = resolve_catalog_number(packet_with_identifiers())
     assert resolved["value"] == "L2714152"
     assert resolved["evidence_source"] == "eval:1::barcode"
+
+
+def test_identifier_shape_prefers_institution_pattern():
+    assert identifier_shape_score("L.2714152", ("L",)) > identifier_shape_score(
+        "a0 seen - SS SS oe . a v mu. 1S",
+        ("L",),
+    )
+
+
+def test_catalog_number_uses_ensemble_score_and_institution_prefix():
+    packet = {
+        "occurrenceID": "http://data.biodiversitydata.nl/naturalis/specimen/example",
+        "components": [
+            {
+                "region_id": "example::number_bad",
+                "component_type": "number",
+                "detector_confidence": 0.9,
+                "readings": [{
+                    "engine": "tesseract_catalog_number_ensemble",
+                    "raw_text": "a0 seen - SS SS oe . a v mu. 1S",
+                    "candidates": [{
+                        "value": "a0 seen - SS SS oe . a v mu. 1S",
+                        "score": 14,
+                    }],
+                }],
+            },
+            {
+                "region_id": "example::number_good",
+                "component_type": "number",
+                "detector_confidence": 0.86,
+                "readings": [{
+                    "engine": "tesseract_catalog_number_ensemble",
+                    "raw_text": "L.2714152",
+                    "candidates": [{"value": "L.2714152", "score": 34}],
+                }],
+            },
+        ],
+    }
+    resolved = resolve_catalog_number(packet)
+    assert resolved["value"] == "L.2714152"
+    assert resolved["evidence_source"] == "example::number_good"
 
 
 def test_alternative_identifiers_are_preserved_and_reviewed():
@@ -147,6 +210,30 @@ def test_whole_sheet_is_only_used_when_component_evidence_is_empty():
     direct = direct_evidence_packet(packet)
     assert [item["region_id"] for item in direct["components"]] == ["number"]
     assert direct["whole_sheet_fallback_used"] is False
+
+
+def test_unreliable_identifier_component_adds_whole_sheet_fallback():
+    packet = {
+        "occurrenceID": "https://plutof.ut.ee/#/specimen/view/example",
+        "components": [
+            {
+                "region_id": "whole",
+                "component_type": "whole_sheet",
+                "readings": [{"engine": "tesseract", "raw_text": "TU351001"}],
+            },
+            {
+                "region_id": "number",
+                "component_type": "number",
+                "readings": [{"engine": "tesseract", "raw_text": "2 SRA Aer ane cece"}],
+            },
+        ],
+    }
+    direct = direct_evidence_packet(packet)
+    assert [item["region_id"] for item in direct["components"]] == [
+        "number",
+        "whole",
+    ]
+    assert direct["whole_sheet_fallback_used"] is True
 
 
 def test_empty_component_evidence_skips_llm_call():

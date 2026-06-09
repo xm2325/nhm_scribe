@@ -27,9 +27,27 @@ IDENTIFIER_SOURCE_PRIORITY = {
     "whole_sheet": 3,
     "primary_specimen_label": 4,
 }
+IDENTIFIER_SOURCE_BONUS = {
+    "barcode_decoder": 400.0,
+    "database_label": 120.0,
+    "number": 80.0,
+    "whole_sheet": 40.0,
+    "primary_specimen_label": 0.0,
+}
 TYPE_STATUS_TERMS = (
     "holotype", "isotype", "lectotype", "isolectotype", "neotype",
     "isoneotype", "syntype", "isosyntype", "paratype", "isoparatype",
+)
+NON_TEXT_COMPONENT_TYPES = {"swatch", "scale"}
+INSTITUTION_PREFIX_HINTS = (
+    ("biodiversitydata.nl/naturalis", ("L",)),
+    ("data.rbge.org.uk", ("E",)),
+    ("specimens.kew.org", ("K",)),
+    ("data.nhm.ac.uk", ("BM",)),
+    ("coldb.mnhn.fr", ("P",)),
+    ("herbarium.bgbm.org", ("B",)),
+    ("plutof.ut.ee", ("TU",)),
+    ("botanicalcollections.be", ("BR",)),
 )
 
 
@@ -53,6 +71,40 @@ def plausible_identifier(value: str) -> bool:
         and any(char.isalpha() for char in key)
         and any(char.isdigit() for char in key)
     )
+
+
+def expected_identifier_prefixes(occurrence_id: str) -> tuple[str, ...]:
+    lowered = clean_str(occurrence_id).lower()
+    for fragment, prefixes in INSTITUTION_PREFIX_HINTS:
+        if fragment in lowered:
+            return prefixes
+    return ()
+
+
+def identifier_shape_score(value: str, prefixes: tuple[str, ...]) -> float:
+    key = _identifier_key(value)
+    if not plausible_identifier(value):
+        return -100.0
+    score = 0.0
+    if re.fullmatch(r"[A-Z]{1,4}\d{5,12}", key):
+        score += 35.0
+    elif re.fullmatch(r"[A-Z0-9]{6,16}", key):
+        score += 10.0
+    else:
+        score -= 20.0
+    if prefixes:
+        if any(
+            re.fullmatch(rf"{re.escape(prefix)}\d{{5,12}}", key)
+            for prefix in prefixes
+        ):
+            score += 80.0
+        elif any(key.startswith(prefix) for prefix in prefixes):
+            score += 25.0
+        else:
+            score -= 25.0
+    if len(clean_str(value).split()) > 2:
+        score -= 30.0
+    return score
 
 
 def _reading(
@@ -94,6 +146,15 @@ def read_sheet_components(
     rows: list[dict[str, Any]] = []
     for _, component in components.iterrows():
         component_type = clean_str(component.get("component_type")).lower()
+        if component_type in NON_TEXT_COMPONENT_TYPES:
+            rows.append(_reading(
+                component=component,
+                engine="not_applicable",
+                raw_text="",
+                ocr_status="non_text_component_skipped",
+                decoder_status="not_applicable",
+            ))
+            continue
         crop_path = clean_str(component.get("crop_path"))
         if component_type == "barcode":
             decoded, decoder_status, _ = decode_barcodes(crop_path)
@@ -260,6 +321,7 @@ def build_evidence_packets(
                             None if clean_str(item.get("model_reported_confidence")) == ""
                             else float(item.get("model_reported_confidence"))
                         ),
+                        "candidates": _json_value(item.get("candidates_json"), []),
                     }
                     for _, item in component_readings.iterrows()
                 ],
@@ -294,46 +356,113 @@ def direct_evidence_packet(packet: dict[str, Any]) -> dict[str, Any]:
         if clean_str(component.get("component_type")).lower() != "whole_sheet"
         and any(clean_str(reading.get("raw_text")) for reading in component.get("readings", []))
     ]
-    if non_whole:
-        return {**packet, "components": non_whole, "whole_sheet_fallback_used": False}
     whole = [
         component
         for component in packet.get("components", [])
         if clean_str(component.get("component_type")).lower() == "whole_sheet"
     ]
+    if non_whole:
+        provisional = {**packet, "components": non_whole}
+        candidates = identifier_candidates(provisional)
+        reliability_threshold = (
+            100.0
+            if expected_identifier_prefixes(clean_str(packet.get("occurrenceID")))
+            else 30.0
+        )
+        reliable_identifier = any(
+            item["priority"] <= 1
+            or float(item.get("rank_score", -100)) >= reliability_threshold
+            for item in candidates
+        )
+        if reliable_identifier or not whole:
+            return {
+                **packet,
+                "components": non_whole,
+                "whole_sheet_fallback_used": False,
+            }
+        return {
+            **packet,
+            "components": [*non_whole, *whole],
+            "whole_sheet_fallback_used": True,
+            "whole_sheet_fallback_reason": "missing_reliable_identifier_component_evidence",
+        }
     return {**packet, "components": whole, "whole_sheet_fallback_used": True}
 
 
 def identifier_candidates(packet: dict[str, Any]) -> list[dict[str, Any]]:
     candidates: dict[str, dict[str, Any]] = {}
+    prefixes = expected_identifier_prefixes(clean_str(packet.get("occurrenceID")))
     for component in packet.get("components", []):
         component_type = clean_str(component.get("component_type")).lower()
+        if component_type not in {*IDENTIFIER_SOURCE_PRIORITY, "barcode"}:
+            continue
+        detector_confidence = float(component.get("detector_confidence", 0) or 0)
         for reading in component.get("readings", []):
             engine = clean_str(reading.get("engine"))
             source_type = "barcode_decoder" if engine == "zxingcpp" else component_type
-            for line in clean_str(reading.get("raw_text")).splitlines():
-                value = line.strip(" .,:;|")
+            reading_candidates = reading.get("candidates", [])
+            if not isinstance(reading_candidates, list):
+                reading_candidates = []
+            values = [
+                (
+                    clean_str(candidate.get("value")),
+                    float(candidate.get("score", 0) or 0),
+                )
+                for candidate in reading_candidates
+                if isinstance(candidate, dict) and clean_str(candidate.get("value"))
+            ]
+            if not values:
+                values = [
+                    (line.strip(" .,:;|"), 0.0)
+                    for line in clean_str(reading.get("raw_text")).splitlines()
+                ]
+            for value, ensemble_score in values:
                 if not plausible_identifier(value):
                     continue
                 key = _identifier_key(value)
                 source = f"{component.get('region_id')}:{engine}"
+                rank_score = (
+                    identifier_shape_score(value, prefixes)
+                    + ensemble_score
+                    + detector_confidence * 20.0
+                )
+                selection_score = (
+                    IDENTIFIER_SOURCE_BONUS.get(source_type, 0.0)
+                    + rank_score
+                )
                 candidate = candidates.setdefault(key, {
                     "value": value,
                     "normalised": key,
                     "priority": IDENTIFIER_SOURCE_PRIORITY.get(source_type, 99),
+                    "rank_score": rank_score,
+                    "selection_score": selection_score,
                     "evidence_source": clean_str(component.get("region_id")),
                     "supporting_sources": [],
                 })
                 if source not in candidate["supporting_sources"]:
                     candidate["supporting_sources"].append(source)
                 source_priority = IDENTIFIER_SOURCE_PRIORITY.get(source_type, 99)
-                if source_priority < int(candidate["priority"]):
+                if (
+                    source_priority < int(candidate["priority"])
+                    or (
+                        source_priority == int(candidate["priority"])
+                        and selection_score
+                        > float(candidate.get("selection_score", -100))
+                    )
+                ):
                     candidate["value"] = value
                     candidate["priority"] = source_priority
+                    candidate["rank_score"] = rank_score
+                    candidate["selection_score"] = selection_score
                     candidate["evidence_source"] = clean_str(component.get("region_id"))
     return sorted(
         candidates.values(),
-        key=lambda item: (item["priority"], -len(item["supporting_sources"]), item["normalised"]),
+        key=lambda item: (
+            -float(item.get("selection_score", 0)),
+            item["priority"],
+            -len(item["supporting_sources"]),
+            item["normalised"],
+        ),
     )
 
 
@@ -342,22 +471,23 @@ def resolve_catalog_number(packet: dict[str, Any]) -> dict[str, Any]:
     if not candidates:
         return empty_reconciled_field()
     best = candidates[0]
-    same_priority = [
+    strong_alternatives = [
         item for item in candidates
-        if item["priority"] == best["priority"] and item["normalised"] != best["normalised"]
-    ]
-    alternatives = [
-        item["value"] for item in candidates[1:]
         if item["normalised"] != best["normalised"]
+        and float(item.get("rank_score", -100))
+        >= max(25.0, float(best.get("rank_score", 0)) - 35.0)
     ]
+    alternatives = [item["value"] for item in strong_alternatives[:5]]
     return {
         "value": best["value"],
-        "model_reported_confidence": 1.0 if best["priority"] == 0 and not same_priority else 0.75,
+        "model_reported_confidence": (
+            1.0 if best["priority"] == 0 and not strong_alternatives else 0.75
+        ),
         "evidence_span": best["value"],
         "evidence_source": best["evidence_source"],
         "supporting_sources": best["supporting_sources"],
         "alternative_candidates": alternatives,
-        "review_required": bool(same_priority or alternatives),
+        "review_required": bool(strong_alternatives),
     }
 
 

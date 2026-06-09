@@ -51,6 +51,7 @@ TEXT_BEARING_COMPONENTS = {
     "type_label",
     "stamp",
 }
+REVIEW_CROP_COMPONENTS = TEXT_BEARING_COMPONENTS | {"handwritten_data"}
 
 
 def write_jsonl(path: Path, rows: list[dict[str, Any]]) -> None:
@@ -412,7 +413,12 @@ def build_review_bundle(
 
         crop_value = clean_str(component.get("crop_path"))
         crop = Path(crop_value) if crop_value else None
-        if crop is not None and crop.is_file():
+        if (
+            crop is not None
+            and crop.is_file()
+            and clean_str(component.get("component_type")).lower()
+            in REVIEW_CROP_COMPONENTS
+        ):
             region = safe_filename(clean_str(component.get("region_id")) or crop.stem)
             crop_name = f"{identifier}_{region}{crop.suffix.lower() or '.jpg'}"
             destination = bundle / "assets" / "crops" / crop_name

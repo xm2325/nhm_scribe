@@ -20,10 +20,19 @@ PRIMARY_LABEL_CLASSES = {
     "institutional_label",
 }
 IDENTIFIER_COMPONENT_CLASSES = {"barcode", "database_label", "number"}
+COMPONENT_CLASS_ALIASES = {
+    "full_database_label": "database_label",
+    "partial_database_label": "database_label",
+    "database_number": "number",
+    "specimen_label": "primary_specimen_label",
+    "primary_label": "primary_specimen_label",
+    "type": "type_label",
+}
 
 
 def _normalise_label(value: Any) -> str:
-    return "_".join(clean_str(value).lower().replace(":", " ").split())
+    normalized = "_".join(clean_str(value).lower().replace(":", " ").split())
+    return COMPONENT_CLASS_ALIASES.get(normalized, normalized)
 
 
 def _scalar(value: Any) -> float:
