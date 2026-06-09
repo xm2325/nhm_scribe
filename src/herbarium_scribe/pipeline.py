@@ -203,6 +203,30 @@ FIELD_ALIASES = {
 }
 
 
+def _extraction_system_prompt() -> str:
+    return (
+        "Extract herbarium label fields as JSON. Return one JSON object with keys "
+        "catalogNumber, scientificName, recordedBy, eventDate, country, stateProvince, "
+        "decimalLatitude, decimalLongitude, and typeStatus. Each field must be an object "
+        'like {"value":"verbatim or normalized value","confidence":0.0,"evidence_span":"exact OCR evidence"}. '
+        "Use an empty value and empty evidence_span when the OCR does not support a field. "
+        "Every non-empty field must include an evidence_span copied exactly from the supplied OCR. "
+        "Country, stateProvince, eventDate, recordedBy, and coordinates must remain empty unless "
+        "their source text is explicit in OCR. Barcode decoder values are stronger catalogNumber "
+        "evidence than numeric job, collection, or image-processing numbers. Catalog-number OCR "
+        "ensemble values are ranked hypotheses from repeated readings of the same crop, not "
+        "independent confirmations. When several OCR hypotheses or decoded "
+        "barcodes disagree, use surrounding OCR and institutional identifier structure; leave "
+        "catalogNumber empty if the specimen-level identifier remains ambiguous. TrOCR "
+        "handwriting results are supplementary hypotheses for their labelled field crops; "
+        "prefer them only when the text is coherent and supported by the same crop or nearby "
+        "OCR context. Evidence tagged FIELD=recorded_by may only support recordedBy. Evidence "
+        "tagged FIELD=event_date may only support eventDate. Never use either of those HTR "
+        "channels to alter catalogNumber, scientificName, country, stateProvince, coordinates, "
+        "or typeStatus. Never repair uncertain OCR by guessing. Return JSON only."
+    )
+
+
 def _strip_json_fence(text: str) -> str:
     text = clean_str(text)
     if text.startswith("```"):
@@ -375,25 +399,7 @@ def stage_extract(config_path: str | Path) -> pd.DataFrame:
             messages = [
                 {
                     "role": "system",
-                    "content": (
-                        "Extract herbarium label fields as JSON. Return one JSON object with keys "
-                        "catalogNumber, scientificName, recordedBy, eventDate, country, stateProvince, "
-                        "decimalLatitude, decimalLongitude, and typeStatus. Each field must be an object "
-                        'like {"value":"verbatim or normalized value","confidence":0.0,"evidence_span":"exact OCR evidence"}. '
-                        "Use an empty value and empty evidence_span when the OCR does not support a field. "
-                        "Every non-empty field must include an evidence_span copied exactly from the supplied OCR. "
-                        "Country, stateProvince, eventDate, recordedBy, and coordinates must remain empty unless "
-                        "their source text is explicit in OCR. Barcode decoder values are stronger catalogNumber "
-                        "evidence than numeric job, collection, or image-processing numbers. Catalog-number OCR "
-                        "ensemble values are ranked hypotheses from repeated readings of the same crop, not "
-                        "independent confirmations. When several OCR hypotheses or decoded "
-                        "barcodes disagree, use surrounding OCR and institutional identifier structure; leave "
-                        "catalogNumber empty if the specimen-level identifier remains ambiguous. TrOCR "
-                        "handwriting results are supplementary hypotheses for their labelled field crops; "
-                        "prefer them only when the text is coherent and supported by the same crop or nearby "
-                        "OCR context. Never repair "
-                        "uncertain OCR by guessing. Return JSON only."
-                    ),
+                    "content": _extraction_system_prompt(),
                 },
                 {"role": "user", "content": prompt},
             ]

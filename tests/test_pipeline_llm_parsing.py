@@ -4,7 +4,12 @@ import json
 import pandas as pd
 import pytest
 
-from herbarium_scribe.pipeline import _parse_llm_json, require_htr_evidence, stage_extract
+from herbarium_scribe.pipeline import (
+    _extraction_system_prompt,
+    _parse_llm_json,
+    require_htr_evidence,
+    stage_extract,
+)
 
 
 def test_parse_llm_json_accepts_wrapped_fields():
@@ -18,6 +23,13 @@ def test_parse_llm_json_accepts_wrapped_fields():
 
 def test_parse_llm_json_rejects_unrelated_json():
     assert _parse_llm_json('{"note": "not an extraction"}') is None
+
+
+def test_extraction_prompt_isolates_htr_evidence_by_field():
+    prompt = _extraction_system_prompt()
+    assert "FIELD=recorded_by may only support recordedBy" in prompt
+    assert "FIELD=event_date may only support eventDate" in prompt
+    assert "Never use either of those HTR channels to alter catalogNumber" in prompt
 
 
 def test_empty_llm_response_is_not_evaluated(tmp_path, monkeypatch):
