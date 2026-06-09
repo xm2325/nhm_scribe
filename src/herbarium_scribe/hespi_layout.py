@@ -193,6 +193,11 @@ def detect_hespi_lite_layout(
     include_whole_sheet = hybrid and bool(layout_cfg.get("include_whole_sheet", True))
     include_primary_labels = hybrid and bool(layout_cfg.get("include_primary_labels", True))
     include_label_fields = bool(layout_cfg.get("include_label_fields", True))
+    selected_field_types = {
+        _normalise_label(value)
+        for value in layout_cfg.get("selected_field_types", [])
+        if clean_str(value)
+    }
     include_supplemental_components = hybrid and bool(layout_cfg.get("include_supplemental_components", True))
     max_primary_labels = int(layout_cfg.get("max_primary_labels", 2))
     max_fields = int(layout_cfg.get("max_fields_per_label", 20))
@@ -263,6 +268,7 @@ def detect_hespi_lite_layout(
         n_components = 0
         n_primary = 0
         n_fields = 0
+        n_selected_fields = 0
 
         if not image_path or not Path(image_path).exists():
             fallback_reason = "missing_image"
@@ -437,10 +443,16 @@ def detect_hespi_lite_layout(
                             "primary_label_crop_path": str(primary_path),
                             "fixture_label_text": clean_str(record.get("fixture_label_text", "")),
                         }
-                        if not hybrid or include_label_fields:
+                        selected_for_ocr = (
+                            not selected_field_types
+                            or label in selected_field_types
+                        )
+                        if (not hybrid or include_label_fields) and selected_for_ocr:
                             selected_rows.append(field_record)
+                            n_selected_fields += 1
                         field_rows.append({
                             **field_record,
+                            "selected_for_ocr": selected_for_ocr,
                             "field_annotation_path": annotation_path,
                         })
                         n_fields += 1
@@ -500,6 +512,7 @@ def detect_hespi_lite_layout(
             "sheet_component_count": n_components,
             "primary_label_count": n_primary,
             "label_field_count": n_fields,
+            "selected_label_field_count": n_selected_fields,
             "ocr_region_count": len(selected_rows),
             "fallback_used": bool(fallback_reason),
             "fallback_reason": fallback_reason,
@@ -516,12 +529,14 @@ def detect_hespi_lite_layout(
         "layout_confidence", "evidence_source", "prompt_header", "ocr_tesseract_config",
         "bbox", "bbox_coordinate_space", "global_bbox",
         "parent_bbox", "image_path", "crop_path",
-        "primary_label_crop_path", "fixture_label_text", "field_annotation_path",
+        "primary_label_crop_path", "fixture_label_text", "selected_for_ocr",
+        "field_annotation_path",
     ]
     diagnostic_columns = [
         "occurrenceID", "image_path", "hespi_available", "hespi_version", "hespi_device",
         "sheet_component_count",
-        "primary_label_count", "label_field_count", "ocr_region_count", "fallback_used",
+        "primary_label_count", "label_field_count", "selected_label_field_count",
+        "ocr_region_count", "fallback_used",
         "fallback_reason", "sheet_annotation_path", "field_annotation_paths",
     ]
     layout_df = pd.DataFrame(layout_rows)

@@ -209,3 +209,115 @@ def test_hespi_lean_hybrid_omits_label_field_crops(tmp_path, monkeypatch):
     diagnostics = pd.read_csv(paths["processed"] / "lean_hespi_layout_diagnostics.csv")
     assert diagnostics.loc[0, "label_field_count"] == 0
     assert pd.isna(diagnostics.loc[0, "fallback_reason"])
+
+
+def test_hespi_hybrid_selects_only_configured_htr_fields(tmp_path, monkeypatch):
+    image_path = tmp_path / "sheet.jpg"
+    Image.new("RGB", (200, 100), "white").save(image_path)
+    paths = {
+        "interim": tmp_path / "interim",
+        "crops": tmp_path / "interim" / "crops",
+        "processed": tmp_path / "processed",
+    }
+    for path in paths.values():
+        path.mkdir(parents=True, exist_ok=True)
+    records = pd.DataFrame([{
+        "occurrenceID": "urn:test:htr-fields",
+        "catalogNumber": "HTR1",
+        "fixture_label_text": "",
+    }])
+    manifest = pd.DataFrame([{
+        "occurrenceID": "urn:test:htr-fields",
+        "image_path": str(image_path),
+    }])
+
+    class HtrFieldHespi(FakeHespi):
+        label_field_model = Model(Result(
+            {0: "collector", 1: "year", 2: "genus"},
+            [
+                Box(0, 0.95, [5, 5, 80, 30]),
+                Box(1, 0.90, [80, 5, 120, 30]),
+                Box(2, 0.85, [120, 5, 180, 30]),
+            ],
+        ))
+
+    monkeypatch.setattr(
+        "herbarium_scribe.hespi_layout._create_hespi",
+        lambda _cfg: HtrFieldHespi(),
+    )
+
+    out = detect_hespi_lite_layout(
+        records,
+        manifest,
+        {
+            "layout": {
+                "strategy": "hespi_hybrid",
+                "include_label_fields": True,
+                "selected_field_types": ["collector", "year"],
+            },
+            "outputs": {"prefix": "htr_fields"},
+        },
+        paths,
+    )
+
+    selected_fields = out[out["evidence_source"].astype(str).str.startswith("field:")]
+    assert set(selected_fields["region_type"]) == {"collector", "year"}
+    all_fields = pd.read_csv(paths["processed"] / "htr_fields_hespi_label_fields.csv")
+    assert set(all_fields["region_type"]) == {"collector", "year", "genus"}
+    assert all_fields["selected_for_ocr"].sum() == 2
+    diagnostics = pd.read_csv(paths["processed"] / "htr_fields_hespi_layout_diagnostics.csv")
+    assert diagnostics.loc[0, "label_field_count"] == 3
+    assert diagnostics.loc[0, "selected_label_field_count"] == 2
+
+
+def test_run_ocr_adds_trocr_as_supplementary_row(tmp_path, monkeypatch):
+    image_path = tmp_path / "collector.jpg"
+    Image.new("RGB", (120, 30), "white").save(image_path)
+    paths = {
+        "ocr": tmp_path / "ocr",
+        "processed": tmp_path / "processed",
+    }
+    for path in paths.values():
+        path.mkdir(parents=True, exist_ok=True)
+    layout = pd.DataFrame([{
+        "occurrenceID": "urn:test:htr",
+        "region_id": "urn:test:htr::collector",
+        "region_label": "collector",
+        "region_type": "collector",
+        "layout_confidence": 0.9,
+        "evidence_source": "field:collector",
+        "prompt_header": "FIELD=collector",
+        "crop_path": str(image_path),
+        "image_path": str(image_path),
+        "fixture_label_text": "",
+    }])
+    monkeypatch.setattr(
+        "herbarium_scribe.ocr.ocr_image_tesseract",
+        lambda *_args, **_kwargs: ("G. Forrest", None, "ok"),
+    )
+    monkeypatch.setattr(
+        "herbarium_scribe.ocr.ocr_image_hespi_trocr",
+        lambda *_args, **_kwargs: ("George Forrest", "ok", 1.25),
+    )
+
+    out = run_ocr(
+        layout,
+        {
+            "ocr": {
+                "backend": "tesseract",
+                "handwriting_recognition": {
+                    "enabled": True,
+                    "model_size": "small",
+                    "region_types": ["collector"],
+                },
+            }
+        },
+        paths,
+    )
+
+    assert set(out["ocr_engine"]) == {"tesseract", "hespi_trocr_small"}
+    htr = out[out["ocr_engine"].eq("hespi_trocr_small")].iloc[0]
+    assert htr["ocr_text"] == "George Forrest"
+    assert "FIELD=recorded_by" in htr["prompt_header"]
+    assert "SOURCE=trocr_handwritten" in htr["prompt_header"]
+    assert htr["htr_source_region_id"] == "urn:test:htr::collector"

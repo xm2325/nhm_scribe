@@ -356,7 +356,10 @@ def stage_extract(config_path: str | Path) -> pd.DataFrame:
                         "ensemble values are ranked hypotheses from repeated readings of the same crop, not "
                         "independent confirmations. When several OCR hypotheses or decoded "
                         "barcodes disagree, use surrounding OCR and institutional identifier structure; leave "
-                        "catalogNumber empty if the specimen-level identifier remains ambiguous. Never repair "
+                        "catalogNumber empty if the specimen-level identifier remains ambiguous. TrOCR "
+                        "handwriting results are supplementary hypotheses for their labelled field crops; "
+                        "prefer them only when the text is coherent and supported by the same crop or nearby "
+                        "OCR context. Never repair "
                         "uncertain OCR by guessing. Return JSON only."
                     ),
                 },

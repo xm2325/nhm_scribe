@@ -1,0 +1,38 @@
+extends: configs/hespi_v7_eval10_catalog_resolver.yaml
+method_name: deepseek_v4_pro_nonthinking_htr
+paths:
+  data_dir: data/experiments/hespi_v8_eval10
+  reports_dir: reports/hespi_v8_eval10
+experiment:
+  title: "Hespi v8 Eval10: Supplementary Handwriting Recognition"
+layout:
+  include_label_fields: true
+  selected_field_types:
+    - collector
+    - year
+    - month
+    - day
+ocr:
+  handwriting_recognition:
+    enabled: true
+    model_size: small
+    region_types:
+      - collector
+      - year
+      - month
+      - day
+    max_regions_per_record: 8
+reconciliation:
+  catalog_number_resolver_methods:
+    - deepseek_v4_pro_nonthinking_htr
+  gbif_methods:
+    - deepseek_v4_pro_nonthinking_htr
+  gbif_cache_path: data/experiments/hespi_v8_eval10/processed/gbif_match_cache.json
+outputs:
+  prefix: hespi_v8_eval10
+  prediction_name: deepseek_htr
+  llm_artifact_family: hespi_v8_eval10
+  llm_outputs_name: hespi_v8_eval10_outputs.jsonl
+  llm_diagnostics_name: hespi_v8_eval10_diagnostics.csv
+  llm_diagnostics_json_name: hespi_v8_eval10_diagnostics.json
+  report_name: hespi_v8_eval10_report.md

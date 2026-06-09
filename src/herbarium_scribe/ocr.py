@@ -13,6 +13,8 @@ from .logging_utils import get_logger
 from .metadata import clean_str
 
 logger = get_logger(__name__)
+_TROCR_ENGINES: dict[str, Any] = {}
+_TROCR_LOAD_ERRORS: dict[str, str] = {}
 
 
 def _catalog_candidate_key(value: str) -> str:
@@ -283,6 +285,76 @@ def ocr_image_paddle(image_path: str) -> tuple[str, float | None, str]:
         return "", None, f"error:{type(e).__name__}"
 
 
+def ocr_image_hespi_trocr(
+    image_path: str,
+    model_size: str = "small",
+) -> tuple[str, str, float]:
+    started = time.monotonic()
+    if not image_path or not Path(image_path).exists():
+        return "", "missing_image", 0.0
+    try:
+        from hespi.ocr import TrOCR
+    except Exception as exc:
+        return "", f"unavailable:{type(exc).__name__}", time.monotonic() - started
+    try:
+        if model_size in _TROCR_LOAD_ERRORS:
+            return "", _TROCR_LOAD_ERRORS[model_size], time.monotonic() - started
+        engine = _TROCR_ENGINES.get(model_size)
+        if engine is None:
+            try:
+                engine = TrOCR(size=model_size)
+            except Exception as exc:
+                status = f"model_load_error:{type(exc).__name__}"
+                _TROCR_LOAD_ERRORS[model_size] = status
+                return "", status, time.monotonic() - started
+            _TROCR_ENGINES[model_size] = engine
+        text = clean_str(engine.get_text(Path(image_path)))
+        return text, "ok" if text else "empty_output", time.monotonic() - started
+    except Exception as exc:
+        return "", f"error:{type(exc).__name__}", time.monotonic() - started
+
+
+def _htr_region_ids(
+    layout_df: pd.DataFrame,
+    config: dict[str, Any],
+) -> set[str]:
+    region_types = {
+        clean_str(value).lower()
+        for value in config.get("region_types", ["collector", "year", "month", "day"])
+    }
+    max_regions = max(1, int(config.get("max_regions_per_record", 8)))
+    if layout_df.empty or "region_id" not in layout_df.columns:
+        return set()
+    candidates = layout_df.copy()
+    region_series = candidates.get(
+        "region_type",
+        pd.Series("", index=candidates.index, dtype=str),
+    ).astype(str).str.lower()
+    candidates = candidates[region_series.isin(region_types)].copy()
+    if candidates.empty:
+        return set()
+    candidates["_confidence"] = pd.to_numeric(
+        candidates.get("layout_confidence", pd.Series("", index=candidates.index)),
+        errors="coerce",
+    ).fillna(-1.0)
+    candidates["_order"] = range(len(candidates))
+    candidates = candidates.sort_values(
+        ["occurrenceID", "_confidence", "_order"],
+        ascending=[True, False, True],
+        kind="stable",
+    )
+    selected = candidates.groupby("occurrenceID", sort=False).head(max_regions)
+    return set(selected["region_id"].astype(str))
+
+
+def _empty_htr_diagnostics() -> dict[str, Any]:
+    return {
+        "htr_model": "",
+        "htr_elapsed_seconds": "",
+        "htr_source_region_id": "",
+    }
+
+
 def run_ocr(layout_df: pd.DataFrame, cfg: dict[str, Any], paths: dict[str, Path]) -> pd.DataFrame:
     ocfg = cfg.get("ocr", {})
     backend = resolve_ocr_backend(ocfg.get("backend", "tesseract"))
@@ -396,7 +468,88 @@ def run_ocr(layout_df: pd.DataFrame, cfg: dict[str, Any], paths: dict[str, Path]
             "ocr_ensemble_candidates_json": json.dumps(ensemble_candidates, ensure_ascii=False),
             "ocr_ensemble_attempts": ensemble_attempts,
             "ocr_ensemble_elapsed_seconds": round(ensemble_elapsed, 3),
+            **_empty_htr_diagnostics(),
         })
+    htr_cfg = ocfg.get("handwriting_recognition", {})
+    if bool(htr_cfg.get("enabled", False)):
+        model_size = clean_str(htr_cfg.get("model_size", "small")) or "small"
+        htr_region_ids = _htr_region_ids(layout_df, htr_cfg)
+        prompt_headers = {
+            "collector": "FIELD=recorded_by",
+            "year": "FIELD=event_date",
+            "month": "FIELD=event_date",
+            "day": "FIELD=event_date",
+            "locality": "FIELD=locality",
+            "geolocation": "FIELD=locality",
+        }
+        prompt_headers.update({
+            clean_str(key).lower(): clean_str(value)
+            for key, value in htr_cfg.get("prompt_headers", {}).items()
+        })
+        selected = layout_df[
+            layout_df["region_id"].astype(str).isin(htr_region_ids)
+        ]
+        for _, htr_row in selected.iterrows():
+            occurrence_id = clean_str(htr_row.get("occurrenceID"))
+            source_region_id = clean_str(htr_row.get("region_id"))
+            region_type = clean_str(
+                htr_row.get("region_type", htr_row.get("region_label", "field"))
+            )
+            crop_path = clean_str(htr_row.get("crop_path"))
+            text, status, elapsed = ocr_image_hespi_trocr(
+                crop_path,
+                model_size=model_size,
+            )
+            header = (
+                f"{prompt_headers.get(region_type.lower(), f'FIELD={region_type}')}; "
+                f"SOURCE=trocr_handwritten; region_type={region_type}; "
+                f"model=microsoft/trocr-{model_size}-handwritten"
+            )
+            prompt_text = f"[{header}]\n{text}" if text else ""
+            region_id = f"{source_region_id}::trocr"
+            out_txt = paths["ocr"] / (
+                region_id.replace(":", "_").replace("/", "_") + ".txt"
+            )
+            out_txt.write_text(text, encoding="utf-8")
+            rows.append({
+                "occurrenceID": occurrence_id,
+                "region_id": region_id,
+                "region_label": region_type,
+                "region_type": region_type,
+                "evidence_source": f"htr:{region_type}",
+                "prompt_header": header,
+                "tesseract_config": "",
+                "ocr_engine": f"hespi_trocr_{model_size}",
+                "ocr_status": status,
+                "ocr_confidence": "",
+                "ocr_text": text,
+                "ocr_prompt_text": prompt_text,
+                "text_length": len(text),
+                "image_path": clean_str(htr_row.get("image_path", "")),
+                "crop_path": crop_path,
+                "error_message": (
+                    status
+                    if status.startswith(
+                        ("error:", "missing", "unavailable:", "model_load_error:")
+                    )
+                    else ""
+                ),
+                "used_fixture_text": False,
+                "ocr_text_path": str(out_txt),
+                "barcode_format": "",
+                "barcode_count": "",
+                "barcode_ambiguous": "",
+                "barcode_elapsed_seconds": "",
+                "ocr_ensemble_used": False,
+                "ocr_ensemble_candidate_count": "",
+                "ocr_ensemble_ambiguous": "",
+                "ocr_ensemble_candidates_json": "",
+                "ocr_ensemble_attempts": "",
+                "ocr_ensemble_elapsed_seconds": "",
+                "htr_model": f"microsoft/trocr-{model_size}-handwritten",
+                "htr_elapsed_seconds": round(elapsed, 3),
+                "htr_source_region_id": source_region_id,
+            })
     barcode_cfg = ocfg.get("barcode_decoder", {})
     if bool(barcode_cfg.get("enabled", False)):
         max_dimension = int(barcode_cfg.get("max_dimension", 6000))
@@ -451,6 +604,7 @@ def run_ocr(layout_df: pd.DataFrame, cfg: dict[str, Any], paths: dict[str, Path]
                 "ocr_ensemble_candidates_json": "",
                 "ocr_ensemble_attempts": "",
                 "ocr_ensemble_elapsed_seconds": "",
+                **_empty_htr_diagnostics(),
             })
     out = pd.DataFrame(rows)
     out.to_csv(paths["processed"] / "ocr_by_region.csv", index=False)
