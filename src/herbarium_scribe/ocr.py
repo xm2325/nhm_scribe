@@ -4,6 +4,7 @@ import json
 import re
 import shutil
 import time
+from difflib import SequenceMatcher
 from pathlib import Path
 from typing import Any
 
@@ -21,6 +22,65 @@ def _exception_status(prefix: str, exc: Exception) -> str:
     message = re.sub(r"\s+", " ", str(exc)).strip()
     detail = f"{type(exc).__name__}:{message}" if message else type(exc).__name__
     return f"{prefix}:{detail[:500]}"
+
+
+def assess_htr_prompt(
+    region_type: str,
+    text: str,
+    source_text: str = "",
+) -> tuple[bool, str]:
+    value = clean_str(text)
+    if not value:
+        return False, "empty_output"
+    field = clean_str(region_type).lower()
+    tokens = re.findall(r"[A-Za-z]+|\d+", value)
+    if field == "day":
+        numbers = [int(token) for token in tokens if token.isdigit()]
+        return (
+            (True, "plausible_day")
+            if len(numbers) == 1 and 1 <= numbers[0] <= 31
+            else (False, "implausible_day")
+        )
+    if field == "month":
+        aliases = {
+            "1", "01", "jan", "january",
+            "2", "02", "feb", "february",
+            "3", "03", "mar", "march",
+            "4", "04", "apr", "april",
+            "5", "05", "may",
+            "6", "06", "jun", "june",
+            "7", "07", "jul", "july",
+            "8", "08", "aug", "august",
+            "9", "09", "sep", "sept", "september",
+            "10", "oct", "october",
+            "11", "nov", "november",
+            "12", "dec", "december",
+        }
+        plausible = len(tokens) == 1 and tokens[0].lower() in aliases
+        return (True, "plausible_month") if plausible else (False, "implausible_month")
+    if field == "year":
+        years = [
+            int(token)
+            for token in tokens
+            if token.isdigit() and len(token) == 4
+        ]
+        plausible = len(years) == 1 and 1500 <= years[0] <= 2100
+        return (True, "plausible_year") if plausible else (False, "implausible_year")
+    if field == "collector":
+        normalized = re.sub(r"[^a-z0-9]", "", value.lower())
+        source_normalized = re.sub(r"[^a-z0-9]", "", clean_str(source_text).lower())
+        agreement = (
+            SequenceMatcher(None, normalized, source_normalized).ratio()
+            if normalized and source_normalized
+            else 0.0
+        )
+        has_initial = bool(re.search(r"(?:^|\s)[A-Z]\.", value))
+        if has_initial:
+            return True, "collector_initial"
+        if agreement >= 0.45:
+            return True, f"collector_ocr_agreement:{agreement:.2f}"
+        return False, f"collector_unconfirmed:{agreement:.2f}"
+    return False, "unsupported_region_type"
 
 
 def _catalog_candidate_key(value: str) -> str:
@@ -361,6 +421,8 @@ def _empty_htr_diagnostics() -> dict[str, Any]:
         "htr_model": "",
         "htr_elapsed_seconds": "",
         "htr_source_region_id": "",
+        "htr_prompt_accepted": "",
+        "htr_prompt_reason": "",
     }
 
 
@@ -498,6 +560,10 @@ def run_ocr(layout_df: pd.DataFrame, cfg: dict[str, Any], paths: dict[str, Path]
         selected = layout_df[
             layout_df["region_id"].astype(str).isin(htr_region_ids)
         ]
+        source_text_by_region = {
+            clean_str(row.get("region_id")): clean_str(row.get("ocr_text"))
+            for row in rows
+        }
         for _, htr_row in selected.iterrows():
             occurrence_id = clean_str(htr_row.get("occurrenceID"))
             source_region_id = clean_str(htr_row.get("region_id"))
@@ -509,12 +575,18 @@ def run_ocr(layout_df: pd.DataFrame, cfg: dict[str, Any], paths: dict[str, Path]
                 crop_path,
                 model_size=model_size,
             )
+            prompt_accepted, prompt_reason = assess_htr_prompt(
+                region_type,
+                text,
+                source_text_by_region.get(source_region_id, ""),
+            )
             header = (
                 f"{prompt_headers.get(region_type.lower(), f'FIELD={region_type}')}; "
                 f"SOURCE=trocr_handwritten; region_type={region_type}; "
-                f"model=microsoft/trocr-{model_size}-handwritten"
+                f"model=microsoft/trocr-{model_size}-handwritten; "
+                f"quality_gate={'accepted' if prompt_accepted else 'rejected'}"
             )
-            prompt_text = f"[{header}]\n{text}" if text else ""
+            prompt_text = f"[{header}]\n{text}" if text and prompt_accepted else ""
             region_id = f"{source_region_id}::trocr"
             out_txt = paths["ocr"] / (
                 region_id.replace(":", "_").replace("/", "_") + ".txt"
@@ -558,6 +630,8 @@ def run_ocr(layout_df: pd.DataFrame, cfg: dict[str, Any], paths: dict[str, Path]
                 "htr_model": f"microsoft/trocr-{model_size}-handwritten",
                 "htr_elapsed_seconds": round(elapsed, 3),
                 "htr_source_region_id": source_region_id,
+                "htr_prompt_accepted": prompt_accepted,
+                "htr_prompt_reason": prompt_reason,
             })
     barcode_cfg = ocfg.get("barcode_decoder", {})
     if bool(barcode_cfg.get("enabled", False)):

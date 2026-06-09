@@ -1,0 +1,26 @@
+extends: configs/hespi_v8_eval10_htr.yaml
+method_name: htr_base_probe
+paths:
+  data_dir: data/experiments/hespi_v9_eval10_htr_base_probe
+  reports_dir: reports/hespi_v9_eval10_htr_base_probe
+experiment:
+  title: "Hespi v9 Eval10: TrOCR Base Evidence Probe"
+ocr:
+  handwriting_recognition:
+    enabled: true
+    require_nonempty: true
+    model_size: base
+    region_types:
+      - collector
+      - year
+      - month
+      - day
+    max_regions_per_record: 8
+llm:
+  backend: none
+rag:
+  enabled: false
+outputs:
+  prefix: hespi_v9_eval10_htr_base_probe
+  prediction_name: probe
+  report_name: hespi_v9_eval10_htr_base_probe_report.md

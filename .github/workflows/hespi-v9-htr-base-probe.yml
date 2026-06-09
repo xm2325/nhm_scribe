@@ -1,0 +1,97 @@
+name: Hespi v9 eval10 TrOCR base probe
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+    paths:
+      - ".github/run-hespi-v9-htr-base-probe.trigger"
+
+permissions:
+  contents: read
+
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    steps:
+      - name: Checkout repository anonymously
+        run: |
+          git init .
+          git remote add origin https://github.com/${{ github.repository }}.git
+          git fetch --depth=1 origin ${{ github.sha }}
+          git checkout --detach FETCH_HEAD
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+
+      - name: Cache Hespi model downloads
+        uses: actions/cache@v5
+        with:
+          path: ~/.cache/hespi
+          key: hespi-0.6.2-${{ runner.os }}
+
+      - name: Cache Hugging Face TrOCR base model
+        uses: actions/cache@v5
+        with:
+          path: ~/.cache/huggingface
+          key: trocr-base-handwritten-${{ runner.os }}-v1
+
+      - name: Install OCR dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y tesseract-ocr
+          python -m pip install --upgrade pip
+          python -m pip install -e '.[dev,hespi]'
+
+      - name: Run tests
+        run: pytest
+
+      - name: Build validated shared image set
+        run: python scripts/prepare_hespi_v2_paired_eval.py
+
+      - name: Run TrOCR base probe without LLM
+        env:
+          HF_HUB_DISABLE_XET: "1"
+        run: python scripts/run_htr_probe.py --config configs/hespi_v9_eval10_htr_base_probe.yaml
+
+      - name: Build HTR evidence report
+        run: |
+          python scripts/report_htr_probe.py \
+            --data-dir data/experiments/hespi_v9_eval10_htr_base_probe \
+            --report-dir reports/hespi_v9_eval10_htr_base_probe \
+            --label "Hespi TrOCR Base"
+
+      - name: Verify probe outputs
+        run: |
+          python - <<'PY'
+          import pandas as pd
+          root = "data/experiments/hespi_v9_eval10_htr_base_probe/processed"
+          ocr = pd.read_csv(f"{root}/ocr_by_region.csv", dtype=str).fillna("")
+          eval_set = pd.read_csv(f"{root}/eval_set.csv", dtype=str).fillna("")
+          htr = ocr[
+              ocr["occurrenceID"].isin(set(eval_set["occurrenceID"]))
+              & ocr["ocr_engine"].str.startswith("hespi_trocr_base")
+          ]
+          if len(eval_set) != 10:
+              raise SystemExit(f"Expected 10 EVAL records, got {len(eval_set)}")
+          if len(htr) < 10:
+              raise SystemExit(f"Expected at least 10 HTR attempts, got {len(htr)}")
+          if htr["ocr_text"].str.strip().eq("").all():
+              raise SystemExit("All TrOCR base outputs were empty")
+          print({"eval_n": len(eval_set), "htr_n": len(htr), "llm_calls": 0})
+          PY
+
+      - name: Upload HTR probe
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: herbarium-scribe-hespi-v9-htr-base-probe-${{ github.run_id }}
+          retention-days: 30
+          path: |
+            data/experiments/hespi_v9_eval10_htr_base_probe/processed/
+            data/experiments/hespi_v9_eval10_htr_base_probe/interim/hespi_lite/
+            data/experiments/hespi_v9_eval10_htr_base_probe/interim/ocr/
+            reports/hespi_v9_eval10_htr_base_probe/

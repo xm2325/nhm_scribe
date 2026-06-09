@@ -4,7 +4,7 @@ import pandas as pd
 from PIL import Image
 
 from herbarium_scribe.hespi_layout import detect_hespi_lite_layout
-from herbarium_scribe.ocr import run_ocr
+from herbarium_scribe.ocr import assess_htr_prompt, run_ocr
 
 
 class Value:
@@ -321,3 +321,29 @@ def test_run_ocr_adds_trocr_as_supplementary_row(tmp_path, monkeypatch):
     assert "FIELD=recorded_by" in htr["prompt_header"]
     assert "SOURCE=trocr_handwritten" in htr["prompt_header"]
     assert htr["htr_source_region_id"] == "urn:test:htr::collector"
+    assert bool(htr["htr_prompt_accepted"]) is True
+
+
+def test_htr_prompt_gate_is_conservative_for_dates_and_collectors():
+    assert assess_htr_prompt("day", "22") == (True, "plausible_day")
+    assert assess_htr_prompt("day", "agree") == (False, "implausible_day")
+    assert assess_htr_prompt("year", "1898") == (True, "plausible_year")
+    assert assess_htr_prompt("year", "necessary") == (False, "implausible_year")
+    assert assess_htr_prompt("collector", "R. E. Holttum", "") == (
+        True,
+        "collector_initial",
+    )
+    accepted, reason = assess_htr_prompt(
+        "collector",
+        "A Glaziou",
+        "A. GLAZIOU",
+    )
+    assert accepted is True
+    assert reason.startswith("collector_ocr_agreement:")
+    accepted, reason = assess_htr_prompt(
+        "collector",
+        "In other projects",
+        "yi pits aan hec",
+    )
+    assert accepted is False
+    assert reason.startswith("collector_unconfirmed:")
