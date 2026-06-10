@@ -144,11 +144,11 @@ def hespi_display_summary_tables(path: str) -> None:
 
     st.subheader("Evaluation summary")
     st.caption("Field-level extraction metrics for the ten-record Hespi v10 evaluation.")
-    st.dataframe(field_metrics, use_container_width=True, hide_index=True)
+    st.dataframe(field_metrics, width="stretch", hide_index=True)
 
     st.subheader("OCR / HTR engine comparison")
     st.caption("Component-level match rate and non-empty output rate for collector and date regions.")
-    st.dataframe(htr_summary, use_container_width=True, hide_index=True)
+    st.dataframe(htr_summary, width="stretch", hide_index=True)
 
 
 @st.cache_data(show_spinner=False)
@@ -223,7 +223,7 @@ def display_component_aware_record(catalog_number: str) -> None:
     ]
     st.dataframe(
         evidence[[column for column in evidence_columns if column in evidence.columns]],
-        use_container_width=True,
+        width="stretch",
         hide_index=True,
     )
     crop_rows = selected[
@@ -268,7 +268,7 @@ def display_component_aware_record(catalog_number: str) -> None:
     else:
         st.dataframe(
             retrieval[[column for column in retrieval_columns if column in retrieval.columns]],
-            use_container_width=True,
+            width="stretch",
             hide_index=True,
         )
 
@@ -308,7 +308,7 @@ def display_component_aware_record(catalog_number: str) -> None:
             })
     st.markdown("**Final field reconciliation**")
     if final_rows:
-        st.dataframe(pd.DataFrame(final_rows), use_container_width=True, hide_index=True)
+        st.dataframe(pd.DataFrame(final_rows), width="stretch", hide_index=True)
     else:
         st.info("No component-aware reconciliation is available for this record.")
 
@@ -362,7 +362,7 @@ def hespi_display_record(path: str, catalog_number: str, detail: pd.DataFrame) -
             "final_catalogNumber",
         ]
         visible = [column for column in columns if column in rows.columns]
-        st.dataframe(rows[visible], use_container_width=True, hide_index=True)
+        st.dataframe(rows[visible], width="stretch", hide_index=True)
 
         display_gpt_primary_label_review(rows, catalog_number)
         display_component_aware_record(catalog_number)
@@ -436,7 +436,7 @@ def show_hespi_v10_home(report_zip: Path) -> None:
             "The same frozen ten-image set is evaluated as full-sheet, primary-label, "
             "component-aware without RAG, and component-aware with RAG."
         )
-        st.dataframe(branch_comparison, use_container_width=True, hide_index=True)
+        st.dataframe(branch_comparison, width="stretch", hide_index=True)
     else:
         st.info(
             "Component-aware review bundle is not installed. "
@@ -566,7 +566,7 @@ def display_gpt_primary_label_review(rows: pd.DataFrame, catalog_number: str) ->
     }])
     st.dataframe(
         overview,
-        use_container_width=True,
+        width="stretch",
         hide_index=True,
         column_config={
             "GPT full transcription": st.column_config.TextColumn(width="large"),
@@ -580,7 +580,7 @@ def display_gpt_primary_label_review(rows: pd.DataFrame, catalog_number: str) ->
     st.markdown("**Existing Hespi final values vs GPT primary-label values**")
     st.dataframe(
         gpt_hespi_comparison_table(rows, review),
-        use_container_width=True,
+        width="stretch",
         hide_index=True,
         column_config={
             "GPT visible evidence": st.column_config.TextColumn(width="large"),
@@ -732,7 +732,7 @@ def show_primary_label_vision() -> None:
             st.image(
                 qwen_bundle_bytes(path, member),
                 caption=f"{clean(crop.get('region_id'))} · layout confidence {clean(crop.get('layout_confidence'))}",
-                use_container_width=True,
+                width="stretch",
             )
 
     st.subheader("2. Text recovered from the same crop")
@@ -759,7 +759,7 @@ def show_primary_label_vision() -> None:
     )
     st.dataframe(
         primary_label_field_comparison(catalog_number, occurrence_id, output, evaluation),
-        use_container_width=True,
+        width="stretch",
         hide_index=True,
         column_config={
             "Qwen visible evidence": st.column_config.TextColumn(width="large"),
@@ -868,10 +868,10 @@ def show_source_image(image_url: str, occurrence_id: str = "") -> None:
         return
     thumb = thumbnail_bytes(occurrence_id) if occurrence_id else None
     if thumb:
-        st.image(thumb, use_container_width=True)
+        st.image(thumb, width="stretch")
         st.caption("Cached preview; open the source image for the full-resolution original.")
     else:
-        st.image(image_url, use_container_width=True)
+        st.image(image_url, width="stretch")
     st.link_button("Open source image", image_url)
 
 
@@ -1042,7 +1042,7 @@ def show_llm_result_panel(row: dict[str, Any], title: str) -> None:
     cols[3].metric("Model", clean(row.get("actual_model_if_available")) or clean(row.get("requested_model")))
     if row.get("error_message"):
         st.warning(clean(row.get("error_message")))
-    st.dataframe(parsed_record_table(row), use_container_width=True, hide_index=True)
+    st.dataframe(parsed_record_table(row), width="stretch", hide_index=True)
     with st.expander("Prompt, context, and raw output", expanded=False):
         st.text_area(f"{title} prompt", clean(row.get("prompt")), height=180, label_visibility="collapsed")
         context = row.get("retrieved_context") or []
@@ -1088,7 +1088,7 @@ def show_pipeline_review(data: dict[str, Any]) -> None:
                 "scientificName": clean(gold.get("scientificName")),
                 "image_status": clean(image_row.get("image_status")),
             }]),
-            use_container_width=True,
+            width="stretch",
             hide_index=True,
         )
 
@@ -1100,7 +1100,7 @@ def show_pipeline_review(data: dict[str, Any]) -> None:
             "confidence": clean(ocr_region.get("ocr_confidence")),
             "used_fixture_text": clean(ocr_region.get("used_fixture_text")),
         }])
-        st.dataframe(ocr_meta, use_container_width=True, hide_index=True)
+        st.dataframe(ocr_meta, width="stretch", hide_index=True)
         st.text_area("OCR text", clean(ocr_row.get("ocr_text")), height=460, label_visibility="collapsed")
 
     st.subheader("3. LLM Result")
@@ -1112,7 +1112,7 @@ def show_pipeline_review(data: dict[str, Any]) -> None:
 
     st.subheader("4. Gold vs Predictions")
     table = comparison_table(data, occ)
-    st.dataframe(table, use_container_width=True, hide_index=True)
+    st.dataframe(table, width="stretch", hide_index=True)
 
 
 def show_image_gallery(data: dict[str, Any]) -> None:
@@ -1146,9 +1146,9 @@ def show_image_gallery(data: dict[str, Any]) -> None:
             thumb = thumbnail_bytes(occ)
             with cols[offset]:
                 if thumb:
-                    st.image(thumb, use_container_width=True)
+                    st.image(thumb, width="stretch")
                 elif image_url:
-                    st.image(image_url, use_container_width=True)
+                    st.image(image_url, width="stretch")
                 else:
                     st.warning("No image URL")
                 st.markdown(f"**{clean(row.get('catalogNumber')) or 'No catalogue number'}**")
@@ -1158,7 +1158,7 @@ def show_image_gallery(data: dict[str, Any]) -> None:
                     key=f"review-{absolute_index}",
                     on_click=select_gallery_record,
                     args=(occ, int(absolute_index)),
-                    use_container_width=True,
+                    width="stretch",
                 )
 
 
@@ -1179,12 +1179,12 @@ def show_overview(data: dict[str, Any]) -> None:
     comparison = method_comparison(data["evaluation_summary"])
     if not comparison.empty:
         st.subheader("Method Comparison")
-        st.dataframe(comparison, use_container_width=True, hide_index=True)
+        st.dataframe(comparison, width="stretch", hide_index=True)
         chart = comparison.set_index("method")[["exact_match", "token_f1"]]
         st.bar_chart(chart)
 
     with st.expander("Evaluation Summary By Field", expanded=False):
-        st.dataframe(data["evaluation_summary"], use_container_width=True, hide_index=True)
+        st.dataframe(data["evaluation_summary"], width="stretch", hide_index=True)
 
     with st.expander("Markdown Report", expanded=False):
         st.markdown(data["report"] or "_No report found._")
@@ -1214,7 +1214,7 @@ def show_record_explorer(data: dict[str, Any]) -> None:
     with right:
         st.subheader("Gold Metadata")
         gold_view = pd.DataFrame([{"field": field, "gold": clean(gold.get(field))} for field in EXTRACTION_FIELDS])
-        st.dataframe(gold_view, use_container_width=True, hide_index=True)
+        st.dataframe(gold_view, width="stretch", hide_index=True)
 
     st.subheader("OCR Text")
     st.text_area("Combined OCR", clean(ocr_row.get("ocr_text")), height=260, label_visibility="collapsed")
@@ -1224,7 +1224,7 @@ def show_record_explorer(data: dict[str, Any]) -> None:
     if preds.empty:
         st.info("No predictions found for this record.")
     else:
-        st.dataframe(preds, use_container_width=True, hide_index=True)
+        st.dataframe(preds, width="stretch", hide_index=True)
 
     st.subheader("Field-Level Evaluation")
     detail = data["evaluation_detail"]
@@ -1233,7 +1233,7 @@ def show_record_explorer(data: dict[str, Any]) -> None:
         st.info("No evaluation detail found for this record.")
     else:
         cols = ["method", "field", "prediction", "gold", "exact_match", "token_f1", "ocr_quality_tertile"]
-        st.dataframe(sub[[col for col in cols if col in sub.columns]], use_container_width=True, hide_index=True)
+        st.dataframe(sub[[col for col in cols if col in sub.columns]], width="stretch", hide_index=True)
 
 
 def show_llm_trace(data: dict[str, Any]) -> None:
@@ -1329,7 +1329,7 @@ def show_live_upload(data: dict[str, Any]) -> None:
         return
 
     image = Image.open(uploaded)
-    st.image(image, caption=uploaded.name, use_container_width=True)
+    st.image(image, caption=uploaded.name, width="stretch")
     with tempfile.NamedTemporaryFile(suffix=".jpg", delete=False) as tmp:
         image.convert("RGB").save(tmp.name)
         image_path = tmp.name
@@ -1345,7 +1345,7 @@ def show_live_upload(data: dict[str, Any]) -> None:
 
     st.subheader("Rule Extraction")
     rule = validate_record(extract_rule_based(ocr_text))
-    st.dataframe(pd.DataFrame([{"field": field, "value": rule[field]["value"], "confidence": rule[field]["confidence"]} for field in EXTRACTION_FIELDS]), use_container_width=True, hide_index=True)
+    st.dataframe(pd.DataFrame([{"field": field, "value": rule[field]["value"], "confidence": rule[field]["confidence"]} for field in EXTRACTION_FIELDS]), width="stretch", hide_index=True)
 
     if use_deepseek:
         if not configure_deepseek_env():
@@ -1361,7 +1361,7 @@ def show_live_upload(data: dict[str, Any]) -> None:
         parsed = result["parsed"] or {}
         if parsed:
             flat = flatten_record(validate_record(parsed))
-            st.dataframe(pd.DataFrame([{"field": field, "value": flat[field], "confidence": flat[f"{field}_confidence"]} for field in EXTRACTION_FIELDS]), use_container_width=True, hide_index=True)
+            st.dataframe(pd.DataFrame([{"field": field, "value": flat[field], "confidence": flat[f"{field}_confidence"]} for field in EXTRACTION_FIELDS]), width="stretch", hide_index=True)
         else:
             st.info("DeepSeek returned no parsed JSON.")
         with st.expander("Prompt and Raw Output"):
