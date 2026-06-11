@@ -4,6 +4,9 @@ on:
   push:
     branches:
       - yoloe26-hespi-html-comparison
+  pull_request:
+    branches:
+      - main
   workflow_dispatch:
 
 permissions:
