@@ -38,8 +38,8 @@ jobs:
           python -m pip install -e '.[hespi]'
           python -m pip install --upgrade ultralytics
 
-      - name: Run executable comparison
-        run: python scripts/run_yoloe26_hespi_html.py
+      - name: Run executable comparison on frozen eval10 bundle
+        run: python scripts/run_yoloe26_hespi_eval10_bundle.py
 
       - name: Verify HTML report
         run: |
