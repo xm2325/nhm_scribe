@@ -20,7 +20,6 @@ IMAGE_DIR = OUT / "raw_images"
 IMAGE_DIR.mkdir(parents=True, exist_ok=True)
 HTML_PATH = OUT / "yoloe26_vs_hespi_eval10.html"
 CSV_PATH = OUT / "detections.csv"
-PAIR_PATH = OUT / "matched_regions.csv"
 SUMMARY_PATH = OUT / "per_image_summary.csv"
 BUNDLE = Path("app_data/component_aware_eval10_review_bundle.zip")
 EVAL_MEMBER = "component_aware_eval10/processed/eval_set.csv"
@@ -35,6 +34,8 @@ HESPI_OCR_CLASSES = {
     "small_database_label", "database_label", "full_database_label", "barcode",
 }
 YOLOE_EXCLUDE = {"scale bar", "color chart"}
+HIGH_VALUE_CHILD = {"barcode", "barcode label", "catalog number", "number", "small database label"}
+PARENT_LABELS = {"primary specimen label", "specimen label", "printed label", "annotation label", "database label", "handwritten note", "stamp"}
 
 
 def clean(value: Any) -> str:
@@ -71,7 +72,7 @@ def load_eval10() -> pd.DataFrame:
 def download_raw_images(frame: pd.DataFrame) -> list[dict[str, str]]:
     rows: list[dict[str, str]] = []
     session = requests.Session()
-    session.headers.update({"User-Agent": "nhm-scribe-raw-yoloe-hespi-comparison/1.0"})
+    session.headers.update({"User-Agent": "nhm-scribe-yoloe-pruning-comparison/1.0"})
     for index, row in frame.iterrows():
         catalog = clean(row["catalog"])
         url = clean(row["image_url"])
@@ -114,14 +115,29 @@ def box_rows(result: Any) -> list[dict[str, Any]]:
     return sorted(rows, key=lambda row: row["confidence"], reverse=True)
 
 
-def iou(left: list[int], right: list[int]) -> float:
-    x0 = max(left[0], right[0]); y0 = max(left[1], right[1])
-    x1 = min(left[2], right[2]); y1 = min(left[3], right[3])
-    intersection = max(0, x1 - x0) * max(0, y1 - y0)
-    left_area = max(0, left[2] - left[0]) * max(0, left[3] - left[1])
-    right_area = max(0, right[2] - right[0]) * max(0, right[3] - right[1])
-    union = left_area + right_area - intersection
-    return intersection / union if union else 0.0
+def area(box: dict[str, Any]) -> int:
+    x0, y0, x1, y1 = box["bbox"]
+    return max(0, x1 - x0) * max(0, y1 - y0)
+
+
+def intersection_area(left: dict[str, Any], right: dict[str, Any]) -> int:
+    lx0, ly0, lx1, ly1 = left["bbox"]
+    rx0, ry0, rx1, ry1 = right["bbox"]
+    x0 = max(lx0, rx0); y0 = max(ly0, ry0)
+    x1 = min(lx1, rx1); y1 = min(ly1, ry1)
+    return max(0, x1 - x0) * max(0, y1 - y0)
+
+
+def iou(left_bbox: list[int], right_bbox: list[int]) -> float:
+    left = {"bbox": left_bbox}; right = {"bbox": right_bbox}
+    inter = intersection_area(left, right)
+    union = area(left) + area(right) - inter
+    return inter / union if union else 0.0
+
+
+def containment(child: dict[str, Any], parent: dict[str, Any]) -> float:
+    child_area = area(child)
+    return intersection_area(child, parent) / child_area if child_area else 0.0
 
 
 def class_agnostic_nms(rows: list[dict[str, Any]], threshold: float = 0.55) -> list[dict[str, Any]]:
@@ -129,8 +145,49 @@ def class_agnostic_nms(rows: list[dict[str, Any]], threshold: float = 0.55) -> l
     for candidate in sorted(rows, key=lambda row: float(row["confidence"]), reverse=True):
         if any(iou(candidate["bbox"], existing["bbox"]) >= threshold for existing in kept):
             continue
+        candidate = dict(candidate)
+        candidate["nms_status"] = "kept_after_class_agnostic_nms"
         kept.append(candidate)
     return kept
+
+
+def prune_yoloe_candidates(rows: list[dict[str, Any]], image_size: tuple[int, int]) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    image_w, image_h = image_size
+    image_area = max(1, image_w * image_h)
+    retained: list[dict[str, Any]] = []
+    dropped: list[dict[str, Any]] = []
+    for candidate in sorted(rows, key=lambda row: area(row), reverse=True):
+        candidate = dict(candidate)
+        candidate_area = area(candidate)
+        candidate_label = clean(candidate["label"])
+        is_high_value = candidate_label in HIGH_VALUE_CHILD
+        drop_reason = ""
+        keep_reason = "parent_or_independent_region"
+        for parent in retained:
+            parent_area = area(parent)
+            if parent_area <= candidate_area:
+                continue
+            if parent_area / image_area > 0.55:
+                continue
+            cont = containment(candidate, parent)
+            ratio = candidate_area / parent_area if parent_area else 0.0
+            if cont >= 0.85 and ratio <= 0.35:
+                if is_high_value:
+                    keep_reason = f"high_value_child_inside:{parent['label']};containment={cont:.2f};area_ratio={ratio:.2f}"
+                    drop_reason = ""
+                    break
+                if parent.get("label") in PARENT_LABELS:
+                    drop_reason = f"contained_in_parent:{parent['label']};containment={cont:.2f};area_ratio={ratio:.2f}"
+                    break
+        if drop_reason:
+            candidate["prune_status"] = "dropped_child_inside_parent"
+            candidate["prune_reason"] = drop_reason
+            dropped.append(candidate)
+        else:
+            candidate["prune_status"] = "retained_for_ocr_queue"
+            candidate["prune_reason"] = keep_reason
+            retained.append(candidate)
+    return sorted(retained, key=lambda row: float(row["confidence"]), reverse=True), sorted(dropped, key=lambda row: float(row["confidence"]), reverse=True)
 
 
 def greedy_match(hespi_rows: list[dict[str, Any]], yoloe_rows: list[dict[str, Any]], threshold: float = 0.30):
@@ -173,12 +230,28 @@ def draw_rows(image: Image.Image, rows: list[dict[str, Any]], title: str, colour
     return canvas
 
 
+def draw_pruned(image: Image.Image, retained: list[dict[str, Any]], dropped: list[dict[str, Any]]) -> Image.Image:
+    canvas = image.copy().convert("RGB")
+    drawing = add_header(canvas, "YOLOE-26 pruning: blue=retained OCR queue, grey=dropped child")
+    width = max(3, canvas.width // 850)
+    for row in dropped:
+        drawing.rectangle(tuple(row["bbox"]), outline=(130, 130, 130), width=max(2, width - 1))
+    for index, row in enumerate(retained, start=1):
+        x0, y0, x1, y1 = row["bbox"]
+        drawing.rectangle((x0, y0, x1, y1), outline=(0, 80, 220), width=width)
+        label = f"{index}: {row['label']} {float(row['confidence']):.2f}"
+        text_y = max(43, y0 - 20)
+        drawing.rectangle((x0, text_y, min(canvas.width, x0 + 12 + 7 * len(label)), text_y + 19), fill=(255, 255, 255))
+        drawing.text((x0 + 3, text_y + 3), label, fill=(0, 80, 220))
+    return canvas
+
+
 def draw_difference(image: Image.Image, pairs, hespi_only, yoloe_only) -> Image.Image:
     canvas = image.copy().convert("RGB")
-    drawing = add_header(canvas, "Difference view: green=matched, orange=Hespi-only, blue=YOLOE-only")
+    drawing = add_header(canvas, "Retained queue vs Hespi: green=matched, orange=Hespi-only, blue=YOLOE-retained-only")
     width = max(3, canvas.width // 850)
     for pair in pairs:
-        drawing.rectangle(tuple(pair["hespi"]["bbox"]), outline=(0, 140, 0), width=width)
+        drawing.rectangle(tuple(pair["yoloe"]["bbox"]), outline=(0, 140, 0), width=width)
     for row in hespi_only:
         drawing.rectangle(tuple(row["bbox"]), outline=(230, 120, 0), width=width)
     for row in yoloe_only:
@@ -188,32 +261,37 @@ def draw_difference(image: Image.Image, pairs, hespi_only, yoloe_only) -> Image.
 
 def data_uri(image: Image.Image) -> str:
     preview = image.copy().convert("RGB")
-    preview.thumbnail((950, 1350))
+    preview.thumbnail((1000, 1400))
     buffer = io.BytesIO()
     preview.save(buffer, format="JPEG", quality=82, optimize=True)
     return "data:image/jpeg;base64," + base64.b64encode(buffer.getvalue()).decode("ascii")
 
 
-def rows_table(rows: list[dict[str, Any]]) -> str:
+def rows_table(rows: list[dict[str, Any]], include_reason: bool = False) -> str:
     if not rows:
         return "<p><em>None</em></p>"
-    body = "".join(
-        "<tr>" f"<td>{index}</td><td>{html.escape(clean(row['label']))}</td>"
-        f"<td>{float(row['confidence']):.3f}</td><td>{html.escape(str(row['bbox']))}</td>" "</tr>"
-        for index, row in enumerate(rows, start=1)
-    )
-    return "<table><thead><tr><th>#</th><th>region</th><th>confidence</th><th>bbox xyxy</th></tr></thead><tbody>" + body + "</tbody></table>"
+    header = "<tr><th>#</th><th>region</th><th>confidence</th><th>bbox xyxy</th>"
+    if include_reason:
+        header += "<th>reason</th>"
+    header += "</tr>"
+    body_parts = []
+    for index, row in enumerate(rows, start=1):
+        body = f"<tr><td>{index}</td><td>{html.escape(clean(row['label']))}</td><td>{float(row['confidence']):.3f}</td><td>{html.escape(str(row['bbox']))}</td>"
+        if include_reason:
+            body += f"<td>{html.escape(clean(row.get('prune_reason', '')))}</td>"
+        body += "</tr>"
+        body_parts.append(body)
+    return "<table><thead>" + header + "</thead><tbody>" + "".join(body_parts) + "</tbody></table>"
 
 
 def pairs_table(pairs: list[dict[str, Any]]) -> str:
     if not pairs:
         return "<p><em>No matched regions at IoU >= 0.30.</em></p>"
     body = "".join(
-        "<tr>" f"<td>{html.escape(clean(pair['hespi']['label']))}</td>"
-        f"<td>{html.escape(clean(pair['yoloe']['label']))}</td><td>{float(pair['iou']):.3f}</td>" "</tr>"
+        f"<tr><td>{html.escape(clean(pair['hespi']['label']))}</td><td>{html.escape(clean(pair['yoloe']['label']))}</td><td>{float(pair['iou']):.3f}</td></tr>"
         for pair in pairs
     )
-    return "<table><thead><tr><th>Hespi region</th><th>YOLOE-26 region</th><th>IoU</th></tr></thead><tbody>" + body + "</tbody></table>"
+    return "<table><thead><tr><th>Hespi region</th><th>Retained YOLOE region</th><th>IoU</th></tr></thead><tbody>" + body + "</tbody></table>"
 
 
 def main() -> None:
@@ -225,7 +303,6 @@ def main() -> None:
     yoloe_model.set_classes(PROMPTS)
     cards: list[str] = []
     detection_rows: list[dict[str, Any]] = []
-    pair_rows: list[dict[str, Any]] = []
     summary_rows: list[dict[str, Any]] = []
     for item in raw_images:
         catalog = item["catalog"]
@@ -238,21 +315,60 @@ def main() -> None:
             row["label"] = row["label"].replace("_", " ")
             if row["label"] not in YOLOE_EXCLUDE:
                 yoloe_raw.append(row)
-        yoloe_regions = class_agnostic_nms(yoloe_raw)
-        pairs, hespi_only, yoloe_only = greedy_match(hespi_regions, yoloe_regions)
-        summary_rows.append({"catalog": catalog, "hespi_regions": len(hespi_regions), "yoloe_raw_regions": len(yoloe_raw), "yoloe_after_nms": len(yoloe_regions), "matched_regions": len(pairs), "hespi_only": len(hespi_only), "yoloe_only": len(yoloe_only)})
-        for status, detector, rows in [("retained", "hespi_yolov8_finetuned", hespi_regions), ("raw", "yoloe_26s_open_vocab", yoloe_raw), ("after_class_agnostic_nms", "yoloe_26s_open_vocab", yoloe_regions)]:
+        yoloe_after_nms = class_agnostic_nms(yoloe_raw)
+        yoloe_retained, yoloe_dropped = prune_yoloe_candidates(yoloe_after_nms, image.size)
+        pairs, hespi_only, yoloe_retained_only = greedy_match(hespi_regions, yoloe_retained)
+        summary_rows.append({
+            "catalog": catalog,
+            "hespi_regions": len(hespi_regions),
+            "yoloe_raw": len(yoloe_raw),
+            "yoloe_after_nms": len(yoloe_after_nms),
+            "yoloe_retained_queue": len(yoloe_retained),
+            "yoloe_dropped_children": len(yoloe_dropped),
+            "matched_with_hespi": len(pairs),
+            "hespi_only_vs_retained": len(hespi_only),
+            "yoloe_retained_only": len(yoloe_retained_only),
+        })
+        for status, detector, rows in [
+            ("hespi_retained", "hespi_yolov8_finetuned", hespi_regions),
+            ("yoloe_raw", "yoloe_26s_open_vocab", yoloe_raw),
+            ("yoloe_after_nms", "yoloe_26s_open_vocab", yoloe_after_nms),
+            ("yoloe_retained_for_ocr_queue", "yoloe_26s_open_vocab", yoloe_retained),
+            ("yoloe_dropped_child_inside_parent", "yoloe_26s_open_vocab", yoloe_dropped),
+        ]:
             for row in rows:
-                detection_rows.append({"catalog": catalog, "detector": detector, "status": status, "region": row["label"], "confidence": row["confidence"], "bbox_xyxy": json.dumps(row["bbox"]), "source_image_url": item["image_url"]})
-        for pair in pairs:
-            pair_rows.append({"catalog": catalog, "hespi_region": pair["hespi"]["label"], "yoloe_region": pair["yoloe"]["label"], "iou": round(float(pair["iou"]), 5), "hespi_bbox": json.dumps(pair["hespi"]["bbox"]), "yoloe_bbox": json.dumps(pair["yoloe"]["bbox"])})
-        cards.append(f"<section><h2>{html.escape(catalog)}</h2><p><a href='{html.escape(item['image_url'])}'>Open raw source image</a></p><div class='grid4'><figure><img src='{data_uri(image)}'><figcaption>1. Raw source image: no detector boxes</figcaption></figure><figure><img src='{data_uri(draw_rows(image, hespi_regions, 'Hespi fine-tuned YOLOv8 only', (210, 30, 30)))}'><figcaption>2. Hespi-only boxes</figcaption></figure><figure><img src='{data_uri(draw_rows(image, yoloe_regions, 'YOLOE-26s only after class-agnostic NMS', (0, 80, 220)))}'><figcaption>3. YOLOE-26-only boxes after NMS</figcaption></figure><figure><img src='{data_uri(draw_difference(image, pairs, hespi_only, yoloe_only))}'><figcaption>4. Difference view</figcaption></figure></div><p><strong>Counts:</strong> Hespi {len(hespi_regions)}; YOLOE raw {len(yoloe_raw)}; YOLOE after NMS {len(yoloe_regions)}; matched {len(pairs)}; Hespi-only {len(hespi_only)}; YOLOE-only {len(yoloe_only)}.</p><div class='threecol'><div><h3>Matched pairs</h3>{pairs_table(pairs)}</div><div><h3>Hespi-only regions</h3>{rows_table(hespi_only)}</div><div><h3>YOLOE-26-only regions after NMS</h3>{rows_table(yoloe_only)}</div></div></section>")
-    detections = pd.DataFrame(detection_rows); detections.to_csv(CSV_PATH, index=False)
-    pd.DataFrame(pair_rows).to_csv(PAIR_PATH, index=False)
-    summary = pd.DataFrame(summary_rows); summary.to_csv(SUMMARY_PATH, index=False)
-    totals = {"images": len(summary), "hespi_regions": int(summary["hespi_regions"].sum()), "yoloe_raw_regions": int(summary["yoloe_raw_regions"].sum()), "yoloe_after_nms": int(summary["yoloe_after_nms"].sum()), "matched_regions": int(summary["matched_regions"].sum()), "hespi_only": int(summary["hespi_only"].sum()), "yoloe_only": int(summary["yoloe_only"].sum())}
+                detection_rows.append({
+                    "catalog": catalog,
+                    "detector": detector,
+                    "status": status,
+                    "region": row["label"],
+                    "confidence": row["confidence"],
+                    "bbox_xyxy": json.dumps(row["bbox"]),
+                    "prune_reason": row.get("prune_reason", ""),
+                    "source_image_url": item["image_url"],
+                })
+        cards.append(
+            f"<section><h2>{html.escape(catalog)}</h2><p><a href='{html.escape(item['image_url'])}'>Open raw source image</a></p>"
+            "<div class='grid5'>"
+            f"<figure><img src='{data_uri(image)}'><figcaption>1. Raw image</figcaption></figure>"
+            f"<figure><img src='{data_uri(draw_rows(image, hespi_regions, 'Hespi fine-tuned YOLOv8', (210, 30, 30)))}'><figcaption>2. Hespi baseline</figcaption></figure>"
+            f"<figure><img src='{data_uri(draw_rows(image, yoloe_after_nms, 'YOLOE-26 after NMS', (90, 90, 90)))}'><figcaption>3. YOLOE after NMS</figcaption></figure>"
+            f"<figure><img src='{data_uri(draw_pruned(image, yoloe_retained, yoloe_dropped))}'><figcaption>4. Pruned OCR queue</figcaption></figure>"
+            f"<figure><img src='{data_uri(draw_difference(image, pairs, hespi_only, yoloe_retained_only))}'><figcaption>5. Retained vs Hespi</figcaption></figure>"
+            "</div>"
+            f"<p><strong>Counts:</strong> Hespi {len(hespi_regions)}; YOLOE raw {len(yoloe_raw)}; after NMS {len(yoloe_after_nms)}; retained OCR queue {len(yoloe_retained)}; dropped children {len(yoloe_dropped)}; matched {len(pairs)}; Hespi-only {len(hespi_only)}; YOLOE-retained-only {len(yoloe_retained_only)}.</p>"
+            "<div class='threecol'><div><h3>Matched retained YOLOE ↔ Hespi</h3>" + pairs_table(pairs) + "</div>"
+            "<div><h3>YOLOE retained-only regions</h3>" + rows_table(yoloe_retained_only, include_reason=True) + "</div>"
+            "<div><h3>Dropped YOLOE child regions</h3>" + rows_table(yoloe_dropped, include_reason=True) + "</div></div>"
+            "<h3>Hespi-only regions after YOLOE pruning</h3>" + rows_table(hespi_only) + "</section>"
+        )
+    pd.DataFrame(detection_rows).to_csv(CSV_PATH, index=False)
+    summary = pd.DataFrame(summary_rows)
+    summary.to_csv(SUMMARY_PATH, index=False)
+    totals = {key: int(summary[key].sum()) for key in ["hespi_regions", "yoloe_raw", "yoloe_after_nms", "yoloe_retained_queue", "yoloe_dropped_children", "matched_with_hespi", "hespi_only_vs_retained", "yoloe_retained_only"]}
+    totals["images"] = int(len(summary))
     total_table = "<table><tbody>" + "".join(f"<tr><th>{html.escape(key)}</th><td>{value}</td></tr>" for key, value in totals.items()) + "</tbody></table>"
-    document = f"""<!doctype html><html><head><meta charset='utf-8'><title>Raw-image YOLOE-26 vs Hespi comparison</title><style>body{{font-family:Arial,sans-serif;max-width:1900px;margin:20px auto;padding:0 16px;line-height:1.42;color:#222}}section{{border-top:2px solid #ddd;margin-top:30px;padding-top:12px}}.grid4{{display:grid;grid-template-columns:repeat(4,1fr);gap:10px}}.threecol{{display:grid;grid-template-columns:repeat(3,1fr);gap:14px}}img{{width:100%;height:auto;border:1px solid #bbb}}table{{border-collapse:collapse;width:100%;font-size:12px}}th,td{{border:1px solid #ccc;padding:5px;text-align:left;vertical-align:top}}.note{{background:#eef6ff;padding:12px;border-left:5px solid #2374c6}}.warn{{background:#fff7dc;padding:12px;border-left:5px solid #d09a00}}@media(max-width:1100px){{.grid4,.threecol{{grid-template-columns:1fr 1fr}}}}@media(max-width:700px){{.grid4,.threecol{{grid-template-columns:1fr}}}}</style></head><body><h1>Raw-image herbarium layout detection: YOLOE-26 vs Hespi fine-tuned YOLOv8</h1><p><strong>Corrected executable comparison.</strong> Each detector receives the same unannotated raw source image. The first panel contains no detector boxes.</p><div class='note'><strong>Four-panel guide:</strong> panel 1 raw input; panel 2 Hespi boxes in red; panel 3 YOLOE-26 boxes in blue after class-agnostic NMS; panel 4 matched regions in green, Hespi-only regions in orange, and YOLOE-only regions in blue.</div><div class='warn'><strong>Interpretation limit:</strong> this is a visual and proxy comparison because there are no human-reviewed bounding-box ground-truth annotations for these ten images. YOLOE-26 uses open-vocabulary prompts without herbarium fine-tuning. Hespi uses herbarium-specific fine-tuned weights.</div><h2>Methods</h2><p><strong>Raw input:</strong> image URLs from component_aware_eval10/processed/eval_set.csv. <strong>Hespi:</strong> imgsz 2048, conf 0.15. <strong>YOLOE-26:</strong> yoloe-26s-seg.pt, imgsz 1024, conf 0.05, class-agnostic NMS IoU 0.55. <strong>Pair matching:</strong> greedy one-to-one IoU >= 0.30.</p><h2>Total proxy counts</h2>{total_table}<h2>Per-image summary</h2>{summary.to_html(index=False, escape=True)}<h2>Per-image visual comparison</h2>{''.join(cards)}</body></html>"""
+    document = f"""<!doctype html><html><head><meta charset='utf-8'><title>Containment-aware YOLOE-26 pruning vs Hespi</title><style>body{{font-family:Arial,sans-serif;max-width:2200px;margin:20px auto;padding:0 16px;line-height:1.42;color:#222}}section{{border-top:2px solid #ddd;margin-top:30px;padding-top:12px}}.grid5{{display:grid;grid-template-columns:repeat(5,1fr);gap:10px}}.threecol{{display:grid;grid-template-columns:repeat(3,1fr);gap:14px}}img{{width:100%;height:auto;border:1px solid #bbb}}table{{border-collapse:collapse;width:100%;font-size:12px}}th,td{{border:1px solid #ccc;padding:5px;text-align:left;vertical-align:top}}.note{{background:#eef6ff;padding:12px;border-left:5px solid #2374c6}}.warn{{background:#fff7dc;padding:12px;border-left:5px solid #d09a00}}@media(max-width:1400px){{.grid5{{grid-template-columns:repeat(2,1fr)}}.threecol{{grid-template-columns:1fr}}}}@media(max-width:700px){{.grid5{{grid-template-columns:1fr}}}}</style></head><body><h1>Containment-aware YOLOE-26 OCR candidate pruning vs Hespi</h1><p><strong>Executable GitHub Actions comparison.</strong> Both detectors receive the same raw, unannotated source image. YOLOE-26 is first used as a high-recall detector, then pruned before downstream OCR.</p><div class='note'><strong>Pruning rule:</strong> class-agnostic NMS first; then remove a smaller child box if at least 85% of it is inside a retained parent and its area is at most 35% of the parent, unless the child label is high-value: barcode, barcode label, catalog number, number, or small database label.</div><div class='warn'><strong>Interpretation limit:</strong> this is still a proxy comparison without human bounding-box ground truth. It measures what would be sent to OCR, not true precision or recall.</div><h2>Total counts</h2>{total_table}<h2>Per-image summary</h2>{summary.to_html(index=False, escape=True)}<h2>Per-image visual comparison</h2>{''.join(cards)}</body></html>"""
     HTML_PATH.write_text(document, encoding="utf-8")
     print(json.dumps(totals, indent=2))
 
