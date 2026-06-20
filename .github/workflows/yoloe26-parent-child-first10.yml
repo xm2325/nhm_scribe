@@ -1,0 +1,163 @@
+name: main_data first10 parent-child OCR queue
+
+on:
+  workflow_dispatch:
+  pull_request:
+    branches:
+      - main
+    paths:
+      - "scripts/run_yoloe26_parent_child_first10.py"
+      - ".github/workflows/yoloe26-parent-child-first10.yml"
+      - "configs/yoloe26_llm_crop_eval10.yaml"
+      - "data/fixtures/techtest_main_data_first10.csv"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: yoloe26-parent-child-first10-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  compare-parent-child:
+    runs-on: ubuntu-latest
+    timeout-minutes: 300
+    env:
+      HF_HUB_DISABLE_XET: "1"
+      YOLOE_WEIGHTS: .cache/models/yoloe-26s-seg.pt
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+
+      - name: Cache detector models
+        uses: actions/cache@v5
+        with:
+          path: |
+            ~/.cache/hespi
+            ~/.cache/huggingface
+            .cache/models
+          key: hespi-0.6.2-yoloe-26s-${{ runner.os }}-parent-child-v1
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y tesseract-ocr
+          python -m pip install --upgrade pip
+          python -m pip install -e '.[dev,hespi,yoloe]'
+
+      - name: Download YOLOE-26s weights
+        run: |
+          mkdir -p .cache/models
+          if [ ! -s "$YOLOE_WEIGHTS" ]; then
+            curl --fail --location --retry 3 \
+              https://github.com/ultralytics/assets/releases/download/v8.4.0/yoloe-26s-seg.pt \
+              --output "$YOLOE_WEIGHTS"
+          fi
+
+      - name: Run tests
+        run: python -m pytest
+
+      - name: Compare parent-child OCR queues on main_data first10
+        run: python scripts/run_yoloe26_parent_child_first10.py
+
+      - name: Verify parent-child outputs
+        run: |
+          python - <<'PY'
+          import json
+          from pathlib import Path
+          import pandas as pd
+
+          root = Path("data/experiments/yoloe26_llm_crop_eval10/processed")
+          expected_files = {
+              "branch_metrics.csv",
+              "crop_decisions.csv",
+              "eval_set.csv",
+              "field_evidence_metrics.csv",
+              "field_evidence_summary.csv",
+              "llm_input_packets.jsonl",
+              "parent_child_summary.csv",
+              "record_metrics.csv",
+              "run_manifest.json",
+              "selected_crops.csv",
+          }
+          missing = sorted(name for name in expected_files if not (root / name).is_file())
+          if missing:
+              raise SystemExit(f"Missing experiment artifacts: {missing}")
+
+          expected_branches = {
+              "hespi",
+              "yoloe_parent_child",
+              "hespi_yoloe_parent_child_union",
+          }
+          eval_set = pd.read_csv(root / "eval_set.csv", dtype=str).fillna("")
+          branches = pd.read_csv(root / "branch_metrics.csv")
+          selected = pd.read_csv(root / "selected_crops.csv", dtype=str).fillna("")
+          parent_child = pd.read_csv(root / "parent_child_summary.csv", dtype=str).fillna("")
+          manifest = json.loads((root / "run_manifest.json").read_text(encoding="utf-8"))
+          packets = [
+              json.loads(line)
+              for line in (root / "llm_input_packets.jsonl").read_text(encoding="utf-8").splitlines()
+              if line.strip()
+          ]
+          expected_catalogs = [
+              "E00289691",
+              "K000587145",
+              "BM000796649",
+              "K000821274",
+              "L.2180891",
+              "K001031711",
+              "BR0000009519527",
+              "E00431314",
+              "E00431342",
+              "BM000574146",
+          ]
+          if eval_set["catalogNumber"].tolist() != expected_catalogs:
+              raise SystemExit(f"Not main_data rows 2-11: {eval_set['catalogNumber'].tolist()}")
+          if set(branches["branch"]) != expected_branches:
+              raise SystemExit(f"Unexpected branches: {set(branches['branch'])}")
+          if set(selected["branch"]) != expected_branches:
+              raise SystemExit(f"At least one branch selected no crops: {set(selected['branch'])}")
+          counts = selected.groupby(["branch", "occurrenceID"]).size()
+          if len(counts) and int(counts.max()) > 8:
+              raise SystemExit(f"LLM packet exceeded eight images: {int(counts.max())}")
+          if any(len(packet["images"]) > 8 for packet in packets):
+              raise SystemExit("Serialized LLM packet exceeded eight images")
+          if not any(parent_child["parent_child_status"].eq("fallback_child_inside_parent")):
+              raise SystemExit("Parent-child strategy produced no fallback child rows")
+          if manifest.get("max_crops_per_packet") != 8:
+              raise SystemExit(f"Unexpected LLM packet cap: {manifest}")
+          if "parent_child_strategy" not in manifest:
+              raise SystemExit("Run manifest lacks parent_child_strategy")
+          visual = Path("reports/yoloe26_llm_crop_eval10/visual_report.html")
+          if not visual.is_file():
+              raise SystemExit("Missing visual_report.html")
+          visual_text = visual.read_text(encoding="utf-8")
+          if "data:image/jpeg;base64," not in visual_text:
+              raise SystemExit("Self-contained HTML has no embedded images")
+          if 'src="../' in visual_text or 'src="assets/' in visual_text:
+              raise SystemExit("Self-contained HTML contains external image paths")
+          print({
+              "eval_n": len(eval_set),
+              "branches": sorted(expected_branches),
+              "selected_n": len(selected),
+              "parent_child_rows": len(parent_child),
+              "fallback_rows": int(parent_child["parent_child_status"].eq("fallback_child_inside_parent").sum()),
+              "max_packet_size": int(counts.max()),
+              "visual_report_bytes": visual.stat().st_size,
+          })
+          PY
+
+      - name: Upload parent-child comparison artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: herbarium-scribe-yoloe26-parent-child-first10-${{ github.run_id }}
+          retention-days: 30
+          path: |
+            data/experiments/yoloe26_llm_crop_eval10/processed/
+            data/experiments/yoloe26_llm_crop_eval10/interim/hespi_lite/
+            data/experiments/yoloe26_llm_crop_eval10/interim/crops/llm_crop_eval/
+            reports/yoloe26_llm_crop_eval10/
