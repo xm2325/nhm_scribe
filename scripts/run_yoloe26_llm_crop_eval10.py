@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import argparse
+import base64
 import html
+import io
 import json
 import os
 import random
@@ -24,6 +26,8 @@ from herbarium_scribe.llm_crop_selector import (
     hierarchical_deduplicate,
     normalized_text,
     parse_bbox,
+    REFERENCE_EVIDENCE_FIELDS,
+    reference_evidence_hit,
     select_diverse_crops,
     selected_duplicate_pair_count,
 )
@@ -341,25 +345,27 @@ def select_branch(
     return decisions
 
 
-def catalog_hit(catalog_number: str, selected: list[dict[str, Any]]) -> bool:
-    gold = normalized_text(catalog_number)
-    if not gold:
-        return False
-    for row in selected:
-        evidence = normalized_text(f"{row.get('decoded_barcode', '')} {row.get('raw_text', '')}")
-        if gold in evidence:
-            return True
-    return False
+def selected_evidence_text(selected: list[dict[str, Any]]) -> str:
+    return "\nEVIDENCE_BOUNDARY\n".join(
+        clean_str(row.get("decoded_barcode")) or clean_str(row.get("raw_text"))
+        for row in selected
+        if clean_str(row.get("decoded_barcode")) or clean_str(row.get("raw_text"))
+    )
 
 
 def build_metrics(
     decisions: list[dict[str, Any]],
     eval_df: pd.DataFrame,
-) -> tuple[pd.DataFrame, pd.DataFrame]:
+) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame, pd.DataFrame]:
     record_rows = []
-    catalog_by_id = dict(zip(eval_df["occurrenceID"].astype(str), eval_df["catalogNumber"].astype(str)))
+    field_rows = []
+    records_by_id = {
+        clean_str(record.get("occurrenceID")): record
+        for _, record in eval_df.iterrows()
+    }
     for branch in BRANCHES:
         for occurrence_id in eval_df["occurrenceID"].astype(str):
+            reference = records_by_id[occurrence_id]
             rows = [
                 row for row in decisions
                 if row["branch"] == branch and clean_str(row.get("occurrenceID")) == occurrence_id
@@ -374,10 +380,29 @@ def build_metrics(
                 for row in usable
                 if normalized_text(row.get("decoded_barcode") or row.get("raw_text"))
             }
+            evidence_text = selected_evidence_text(selected)
+            reference_count = 0
+            hit_count = 0
+            for field in REFERENCE_EVIDENCE_FIELDS:
+                value = clean_str(reference.get(field))
+                available = bool(value)
+                hit = available and reference_evidence_hit(field, value, evidence_text)
+                reference_count += int(available)
+                hit_count += int(hit)
+                field_rows.append({
+                    "branch": branch,
+                    "occurrenceID": occurrence_id,
+                    "catalogNumber": clean_str(reference.get("catalogNumber")),
+                    "field": field,
+                    "reference_value": value,
+                    "reference_available": available,
+                    "evidence_hit": hit,
+                    "matching_scope": "selected_packet_ocr_and_barcode",
+                })
             record_rows.append({
                 "branch": branch,
                 "occurrenceID": occurrence_id,
-                "catalogNumber": catalog_by_id.get(occurrence_id, ""),
+                "catalogNumber": clean_str(reference.get("catalogNumber")),
                 "candidate_count": len(rows),
                 "evidence_accepted_count": sum(row.get("selection_status") != "rejected_evidence" for row in rows),
                 "input_image_count": len(selected),
@@ -386,12 +411,35 @@ def build_metrics(
                 "unique_text_count": len(unique_texts),
                 "text_uniqueness_rate": round(len(unique_texts) / len(usable), 6) if usable else 0.0,
                 "selected_duplicate_pair_count": selected_duplicate_pair_count(selected),
-                "catalog_number_evidence_hit": catalog_hit(catalog_by_id.get(occurrence_id, ""), selected),
+                "reference_field_count": reference_count,
+                "field_evidence_hit_count": hit_count,
+                "field_evidence_hit_rate": round(hit_count / reference_count, 6) if reference_count else 0.0,
+                "catalog_number_evidence_hit": reference_evidence_hit(
+                    "catalogNumber",
+                    reference.get("catalogNumber"),
+                    evidence_text,
+                ),
             })
     records = pd.DataFrame(record_rows)
+    fields = pd.DataFrame(field_rows)
+    field_summary_rows = []
+    for branch in BRANCHES:
+        for field in REFERENCE_EVIDENCE_FIELDS:
+            group = fields[fields["branch"].eq(branch) & fields["field"].eq(field)]
+            available = group[group["reference_available"]]
+            hits = int(available["evidence_hit"].sum())
+            field_summary_rows.append({
+                "branch": branch,
+                "field": field,
+                "reference_available_count": len(available),
+                "evidence_hit_count": hits,
+                "evidence_hit_rate": round(hits / len(available), 4) if len(available) else 0.0,
+            })
+    field_summary = pd.DataFrame(field_summary_rows)
     branch_rows = []
     for branch in BRANCHES:
         group = records[records["branch"].eq(branch)]
+        branch_fields = fields[fields["branch"].eq(branch) & fields["reference_available"]]
         branch_decisions = [row for row in decisions if row["branch"] == branch]
         selected = [row for row in branch_decisions if row.get("selection_status") == "selected"]
         usable_count = sum(bool(clean_str(row.get("raw_text")) or clean_str(row.get("decoded_barcode"))) for row in selected)
@@ -403,6 +451,9 @@ def build_metrics(
             "mean_input_images_per_record": round(float(group["input_image_count"].mean()), 4),
             "records_without_input": int(group["input_image_count"].eq(0).sum()),
             "catalog_number_evidence_hit_rate": round(float(group["catalog_number_evidence_hit"].mean()), 4),
+            "field_reference_count": len(branch_fields),
+            "field_evidence_hit_count": int(branch_fields["evidence_hit"].sum()),
+            "field_evidence_hit_rate": round(float(branch_fields["evidence_hit"].mean()), 4) if len(branch_fields) else 0.0,
             "selected_crop_ocr_usable_rate": round(usable_count / len(selected), 4) if selected else 0.0,
             "mean_text_uniqueness_rate": round(float(group["text_uniqueness_rate"].mean()), 4),
             "selected_duplicate_pair_count": int(group["selected_duplicate_pair_count"].sum()),
@@ -410,7 +461,7 @@ def build_metrics(
             "dedup_rejection_count": sum(row.get("selection_status") == "rejected_duplicate" for row in branch_decisions),
             "quota_rejection_count": sum(row.get("selection_status") == "rejected_quota" for row in branch_decisions),
         })
-    return records, pd.DataFrame(branch_rows)
+    return records, pd.DataFrame(branch_rows), fields, field_summary
 
 
 def draw_overview(source_path: str, rows: list[dict[str, Any]], destination: Path, *, selected_only: bool) -> None:
@@ -437,6 +488,18 @@ def draw_overview(source_path: str, rows: list[dict[str, Any]], destination: Pat
     image.save(destination, format="JPEG", quality=90)
 
 
+def image_data_uri(path: Path, *, max_side: int, quality: int = 76) -> str:
+    if not path.is_file():
+        return ""
+    with Image.open(path) as source:
+        image = source.convert("RGB")
+        image.thumbnail((max_side, max_side), Image.Resampling.LANCZOS)
+        buffer = io.BytesIO()
+        image.save(buffer, format="JPEG", quality=quality, optimize=True)
+    payload = base64.b64encode(buffer.getvalue()).decode("ascii")
+    return f"data:image/jpeg;base64,{payload}"
+
+
 def prepare_artifact_members(decisions: list[dict[str, Any]]) -> None:
     for row in decisions:
         row["review_crop_member"] = ""
@@ -456,6 +519,8 @@ def build_review_bundle(
     eval_df: pd.DataFrame,
     manifest: pd.DataFrame,
     branch_metrics: pd.DataFrame,
+    field_metrics: pd.DataFrame,
+    field_summary: pd.DataFrame,
 ) -> Path:
     bundle = report_dir / "review_bundle"
     if bundle.exists():
@@ -471,11 +536,13 @@ def build_review_bundle(
 
     source_by_id = dict(zip(manifest["occurrenceID"].astype(str), manifest["image_path"].astype(str)))
     record_links = []
+    embedded_records = []
     for _, record in eval_df.iterrows():
         occurrence_id = clean_str(record.get("occurrenceID"))
         slug = safe_filename(occurrence_id)
         source_path = source_by_id.get(occurrence_id, "")
         sections = []
+        embedded_sections = []
         for branch in BRANCHES:
             rows = [
                 row for row in decisions
@@ -492,6 +559,7 @@ def build_review_bundle(
                 draw_overview(source_path, rows, bundle / candidate_member, selected_only=False)
                 draw_overview(source_path, rows, bundle / selected_member, selected_only=True)
             crop_cards = []
+            embedded_crop_cards = []
             for row in selected:
                 member = clean_str(row.get("review_crop_member"))
                 source = Path(clean_str(row.get("crop_path")))
@@ -505,10 +573,41 @@ def build_review_bundle(
                     f'{html.escape(clean_str(row.get("detector_family")))}<br>'
                     f'{html.escape(clean_str(row.get("raw_text"))[:160])}</figcaption></figure>'
                 )
+                crop_uri = image_data_uri(source, max_side=300)
+                embedded_crop_cards.append(
+                    f'<figure><img src="{crop_uri}"><figcaption>'
+                    f'{row.get("input_order")}. {html.escape(clean_str(row.get("component_type")))} | '
+                    f'{html.escape(clean_str(row.get("detector_family")))}<br>'
+                    f'{html.escape(clean_str(row.get("raw_text"))[:220])}</figcaption></figure>'
+                )
             sections.append(
                 f'<section><h2>{html.escape(branch)}</h2><div class="overviews">'
                 f'<img src="../{candidate_member}"><img src="../{selected_member}"></div>'
                 f'<div class="crops">{"".join(crop_cards) or "No selected crops"}</div></section>'
+            )
+            record_fields = field_metrics[
+                field_metrics["branch"].eq(branch)
+                & field_metrics["occurrenceID"].astype(str).eq(occurrence_id)
+            ]
+            field_rows_html = "".join(
+                "<tr>"
+                f'<td>{html.escape(clean_str(item.get("field")))}</td>'
+                f'<td>{html.escape(clean_str(item.get("reference_value"))) or "not available"}</td>'
+                f'<td class="{("hit" if bool(item.get("evidence_hit")) else "miss")}">'
+                f'{("hit" if bool(item.get("evidence_hit")) else ("miss" if bool(item.get("reference_available")) else "n/a"))}</td>'
+                "</tr>"
+                for _, item in record_fields.iterrows()
+            )
+            candidate_uri = image_data_uri(bundle / candidate_member, max_side=900)
+            selected_uri = image_data_uri(bundle / selected_member, max_side=900)
+            embedded_sections.append(
+                f'<article class="branch"><h3>{html.escape(branch)}</h3>'
+                f'<p>{len(rows)} candidates; {len(selected)} crops in the simulated LLM packet.</p>'
+                f'<div class="overviews"><figure><img src="{candidate_uri}"><figcaption>All candidates: green selected, red rejected</figcaption></figure>'
+                f'<figure><img src="{selected_uri}"><figcaption>Final packet order</figcaption></figure></div>'
+                f'<h4>Reference field evidence</h4><table><thead><tr><th>Field</th><th>main_data reference</th><th>Evidence</th></tr></thead>'
+                f'<tbody>{field_rows_html}</tbody></table><h4>Selected crops</h4>'
+                f'<div class="crops">{"".join(embedded_crop_cards) or "No selected crops"}</div></article>'
             )
         page = f"""<!doctype html><meta charset="utf-8"><title>{html.escape(occurrence_id)}</title>
 <style>body{{font-family:system-ui;margin:24px;background:#f6f7f9}}section{{background:white;padding:16px;margin:18px 0;border-radius:8px}}.overviews,.crops{{display:flex;gap:12px;flex-wrap:wrap}}.overviews img{{max-width:48%;height:auto}}figure{{width:260px;margin:0}}figure img{{width:100%;max-height:220px;object-fit:contain;background:#eee}}figcaption{{font-size:12px;white-space:pre-wrap}}a{{color:#155eef}}</style>
@@ -517,12 +616,24 @@ def build_review_bundle(
         record_links.append(
             f'<li><a href="records/{slug}.html">{html.escape(clean_str(record.get("catalogNumber")))} | {html.escape(occurrence_id)}</a></li>'
         )
+        embedded_records.append(
+            f'<details class="record" id="record-{slug}"><summary>'
+            f'{html.escape(clean_str(record.get("catalogNumber")))} | {html.escape(occurrence_id)}</summary>'
+            f'{"".join(embedded_sections)}</details>'
+        )
 
     summary_html = branch_metrics.to_html(index=False, border=0)
     index = f"""<!doctype html><meta charset="utf-8"><title>YOLOE-26 LLM crop eval10</title>
 <style>body{{font-family:system-ui;margin:28px;max-width:1400px}}table{{border-collapse:collapse;font-size:13px}}td,th{{border:1px solid #ddd;padding:7px}}th{{background:#f2f4f7}}li{{margin:8px 0}}</style>
 <h1>YOLOE-26 LLM crop selector eval10</h1><p>This compares the final clean image packet sent to an LLM. No LLM was called.</p>{summary_html}<h2>Per-record review</h2><ul>{''.join(record_links)}</ul>"""
     (bundle / "index.html").write_text(index, encoding="utf-8")
+    visual_report = report_dir / "visual_report.html"
+    visual_html = f"""<!doctype html><html><head><meta charset="utf-8"><title>main_data first10 crop comparison</title>
+<style>:root{{--ink:#16202a;--muted:#667085;--line:#d0d5dd;--paper:#fff;--bg:#f2f4f7;--accent:#175cd3}}*{{box-sizing:border-box}}body{{margin:0;background:var(--bg);color:var(--ink);font:14px/1.45 system-ui,sans-serif}}main{{max-width:1500px;margin:auto;padding:28px}}header,.summary,.record{{background:var(--paper);border:1px solid var(--line);border-radius:12px;margin-bottom:18px;padding:20px}}h1{{margin:0 0 8px}}h2,h3,h4{{margin-top:18px}}.note{{color:var(--muted)}}table{{border-collapse:collapse;width:100%;font-size:12px}}th,td{{border-bottom:1px solid #eaecf0;padding:6px;text-align:left;vertical-align:top}}th{{background:#f9fafb}}.hit{{color:#067647;font-weight:700}}.miss{{color:#b42318}}summary{{font-size:18px;font-weight:700;cursor:pointer}}.branch{{border-top:3px solid var(--accent);margin-top:22px;padding-top:4px}}.overviews,.crops{{display:flex;gap:12px;flex-wrap:wrap}}.overviews figure{{width:min(48%,700px)}}figure{{margin:0;width:250px}}figure img{{display:block;width:100%;max-height:620px;object-fit:contain;background:#eef0f3;border-radius:6px}}figcaption{{font-size:11px;color:var(--muted);white-space:pre-wrap;margin-top:4px}}@media(max-width:800px){{.overviews figure{{width:100%}}main{{padding:10px}}}}</style></head>
+<body><main><header><h1>Hespi vs YOLOE-26: main_data first 10</h1><p>Deterministic rows 2-11 from <code>main_data</code>. This report evaluates the final crop packet before multimodal inference; no external LLM was called.</p><p class="note">Field evidence hit means a normalized reference value appears in selected OCR/barcode evidence. It is evidence coverage, not extraction accuracy, and the supplied reference data may contain errors.</p></header>
+<section class="summary"><h2>Branch packet metrics</h2>{branch_metrics.to_html(index=False, border=0)}<h2>Field evidence metrics</h2>{field_summary.to_html(index=False, border=0)}</section>{''.join(embedded_records)}</main></body></html>"""
+    visual_report.write_text(visual_html, encoding="utf-8")
+    shutil.copy2(visual_report, bundle / "visual_report.html")
     archive = report_dir / "review_bundle.zip"
     with zipfile.ZipFile(archive, "w", compression=zipfile.ZIP_DEFLATED) as handle:
         for source in bundle.rglob("*"):
@@ -531,11 +642,11 @@ def build_review_bundle(
     return archive
 
 
-def write_report(path: Path, branch_metrics: pd.DataFrame) -> None:
+def write_report(path: Path, branch_metrics: pd.DataFrame, field_summary: pd.DataFrame) -> None:
     lines = [
         "# YOLOE-26 LLM crop selector eval10",
         "",
-        "This experiment stops immediately before multimodal LLM inference. All branches share the frozen eval10, OCR settings, evidence gate, role quotas, and eight-image cap.",
+        "This experiment stops immediately before multimodal LLM inference. It uses rows 2-11 from the supplied `main_data` worksheet. All branches share the same records, OCR settings, evidence gate, role quotas, and eight-image cap.",
         "",
         "## Branches",
         "",
@@ -548,9 +659,14 @@ def write_report(path: Path, branch_metrics: pd.DataFrame) -> None:
         "",
         branch_metrics.to_markdown(index=False),
         "",
+        "## Reference field evidence metrics",
+        "",
+        field_summary.to_markdown(index=False),
+        "",
         "## Interpretation guardrails",
         "",
-        "- Catalogue evidence hit checks whether the known catalogue number appears in selected OCR or barcode evidence; it is not detector mAP.",
+        "- A field evidence hit checks whether the normalized `main_data` reference value appears in selected OCR or barcode evidence; it is not detector mAP or LLM extraction accuracy.",
+        "- Reference fields are used only after packet selection for evaluation and are never included in the simulated LLM input packet.",
         "- OCR usability and text uniqueness are packet-quality diagnostics, not CER/WER because verified full-label transcriptions are unavailable.",
         "- Ten records are sufficient for visual diagnosis, not a production accuracy claim.",
     ]
@@ -576,8 +692,11 @@ def main() -> None:
 
     cfg, paths = load_runtime(args.config)
     processed = paths["processed"]
-    print("[yoloe-crop-eval] loading frozen eval10", flush=True)
+    print("[yoloe-crop-eval] loading main_data rows 2-11", flush=True)
     _, eval_df, _ = stage_metadata(args.config)
+    if "source_row" in eval_df.columns:
+        eval_df = eval_df.sort_values("source_row", key=lambda values: pd.to_numeric(values, errors="coerce")).reset_index(drop=True)
+        eval_df.to_csv(processed / "eval_set.csv", index=False)
     manifest = stage_download(args.config)
     print("[yoloe-crop-eval] running Hespi", flush=True)
     stage_layout(args.config)
@@ -606,7 +725,7 @@ def main() -> None:
         deduplicate=True,
     ))
     prepare_artifact_members(decisions)
-    record_metrics, branch_metrics = build_metrics(decisions, eval_df)
+    record_metrics, branch_metrics, field_metrics, field_summary = build_metrics(decisions, eval_df)
 
     serializable_decisions(decisions).to_csv(processed / "crop_decisions.csv", index=False)
     serializable_decisions([
@@ -614,6 +733,8 @@ def main() -> None:
     ]).to_csv(processed / "selected_crops.csv", index=False)
     record_metrics.to_csv(processed / "record_metrics.csv", index=False)
     branch_metrics.to_csv(processed / "branch_metrics.csv", index=False)
+    field_metrics.to_csv(processed / "field_evidence_metrics.csv", index=False)
+    field_summary.to_csv(processed / "field_evidence_summary.csv", index=False)
     packets = []
     for branch in BRANCHES:
         for _, record in eval_df.iterrows():
@@ -630,7 +751,7 @@ def main() -> None:
             packets.append({
                 "branch": branch,
                 "occurrenceID": occurrence_id,
-                "catalogNumber_gold_for_evaluation_only": clean_str(record.get("catalogNumber")),
+                "reference_data_excluded": True,
                 "images": [
                     {
                         "input_order": row.get("input_order"),
@@ -649,9 +770,35 @@ def main() -> None:
                 ],
             })
     write_jsonl(processed / "llm_input_packets.jsonl", packets)
+    run_manifest = {
+        "data_source": "data/fixtures/techtest_main_data_first10.csv",
+        "source_workbook": "techtest_herbariumdata.xlsx",
+        "source_workbook_sha256": "dcef830b778b967eb2e000a5f31d2654a480546f149e8e271d2189b4f2e047af",
+        "source_sheet": "main_data",
+        "source_rows": "2-11",
+        "record_count": len(eval_df),
+        "branches": list(BRANCHES),
+        "max_crops_per_packet": int(cfg.get("crop_selector", {}).get("total_limit", 8)),
+        "external_llm_calls": 0,
+        "llm_backend": clean_str(cfg.get("llm", {}).get("backend", "none")) or "none",
+        "reference_data_in_llm_packets": False,
+    }
+    (processed / "run_manifest.json").write_text(
+        json.dumps(run_manifest, indent=2, ensure_ascii=False) + "\n",
+        encoding="utf-8",
+    )
     report_path = paths["reports"] / "comparison_report.md"
-    write_report(report_path, branch_metrics)
-    archive = build_review_bundle(paths["reports"], processed, decisions, eval_df, manifest, branch_metrics)
+    write_report(report_path, branch_metrics, field_summary)
+    archive = build_review_bundle(
+        paths["reports"],
+        processed,
+        decisions,
+        eval_df,
+        manifest,
+        branch_metrics,
+        field_metrics,
+        field_summary,
+    )
     print(branch_metrics.to_string(index=False), flush=True)
     print(f"[yoloe-crop-eval] review bundle: {archive}", flush=True)
 

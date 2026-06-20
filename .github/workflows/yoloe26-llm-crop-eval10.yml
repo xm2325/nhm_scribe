@@ -1,4 +1,4 @@
-name: YOLOE-26 LLM crop selector eval10
+name: main_data first10 Hespi vs YOLOE-26 crops
 
 on:
   workflow_dispatch:
@@ -41,7 +41,7 @@ jobs:
             ~/.cache/hespi
             ~/.cache/huggingface
             .cache/models
-          key: hespi-0.6.2-yoloe-26s-${{ runner.os }}-v1
+          key: hespi-0.6.2-yoloe-26s-${{ runner.os }}-v2
 
       - name: Install dependencies
         run: |
@@ -62,10 +62,7 @@ jobs:
       - name: Run tests
         run: python -m pytest
 
-      - name: Build validated frozen image set
-        run: python scripts/prepare_hespi_v2_paired_eval.py
-
-      - name: Compare final LLM crop packets
+      - name: Compare main_data first10 crop packets
         run: python scripts/run_yoloe26_llm_crop_eval10.py
 
       - name: Verify experiment outputs
@@ -80,8 +77,11 @@ jobs:
               "branch_metrics.csv",
               "crop_decisions.csv",
               "eval_set.csv",
+              "field_evidence_metrics.csv",
+              "field_evidence_summary.csv",
               "llm_input_packets.jsonl",
               "record_metrics.csv",
+              "run_manifest.json",
               "selected_crops.csv",
           }
           missing = sorted(name for name in expected_files if not (root / name).is_file())
@@ -96,8 +96,11 @@ jobs:
           }
           eval_set = pd.read_csv(root / "eval_set.csv", dtype=str).fillna("")
           records = pd.read_csv(root / "record_metrics.csv")
+          fields = pd.read_csv(root / "field_evidence_metrics.csv")
+          field_summary = pd.read_csv(root / "field_evidence_summary.csv")
           selected = pd.read_csv(root / "selected_crops.csv", dtype=str).fillna("")
           branches = pd.read_csv(root / "branch_metrics.csv")
+          run_manifest = json.loads((root / "run_manifest.json").read_text(encoding="utf-8"))
           packets = [
               json.loads(line)
               for line in (root / "llm_input_packets.jsonl").read_text(encoding="utf-8").splitlines()
@@ -105,10 +108,30 @@ jobs:
           ]
           if len(eval_set) != 10:
               raise SystemExit(f"Expected 10 EVAL records, got {len(eval_set)}")
+          expected_catalogs = [
+              "E00289691",
+              "K000587145",
+              "BM000796649",
+              "K000821274",
+              "L.2180891",
+              "K001031711",
+              "BR0000009519527",
+              "E00431314",
+              "E00431342",
+              "BM000574146",
+          ]
+          if eval_set["catalogNumber"].tolist() != expected_catalogs:
+              raise SystemExit(f"Not main_data rows 2-11: {eval_set['catalogNumber'].tolist()}")
+          if set(eval_set["source_sheet"]) != {"main_data"}:
+              raise SystemExit(f"Unexpected source sheet: {set(eval_set['source_sheet'])}")
           if set(branches["branch"]) != expected_branches:
               raise SystemExit(f"Unexpected branches: {set(branches['branch'])}")
           if len(records) != 40 or len(packets) != 40:
               raise SystemExit(f"Expected 40 record rows and packets, got {len(records)} and {len(packets)}")
+          if len(fields) != 360 or len(field_summary) != 36:
+              raise SystemExit(f"Expected 360 field rows and 36 summaries, got {len(fields)} and {len(field_summary)}")
+          if int(fields["reference_available"].sum()) == 0:
+              raise SystemExit("No main_data field references were evaluated")
           counts = selected.groupby(["branch", "occurrenceID"]).size()
           if len(counts) and int(counts.max()) > 8:
               raise SystemExit(f"LLM packet exceeded eight images: {int(counts.max())}")
@@ -116,16 +139,48 @@ jobs:
               raise SystemExit(f"At least one branch selected no crops: {set(selected['branch'])}")
           if any(len(packet["images"]) > 8 for packet in packets):
               raise SystemExit("Serialized LLM packet exceeded eight images")
+          if any(not packet.get("reference_data_excluded") for packet in packets):
+              raise SystemExit("A packet does not declare reference-data exclusion")
+          forbidden_packet_keys = {"catalogNumber_gold_for_evaluation_only", "reference_fields"}
+          if any(forbidden_packet_keys & set(packet) for packet in packets):
+              raise SystemExit("Reference answers leaked into simulated LLM packets")
+          if run_manifest != {
+              "data_source": "data/fixtures/techtest_main_data_first10.csv",
+              "source_workbook": "techtest_herbariumdata.xlsx",
+              "source_workbook_sha256": "dcef830b778b967eb2e000a5f31d2654a480546f149e8e271d2189b4f2e047af",
+              "source_sheet": "main_data",
+              "source_rows": "2-11",
+              "record_count": 10,
+              "branches": [
+                  "hespi",
+                  "yoloe_standard_nms",
+                  "yoloe_hierarchical",
+                  "hespi_yoloe_union",
+              ],
+              "max_crops_per_packet": 8,
+              "external_llm_calls": 0,
+              "llm_backend": "none",
+              "reference_data_in_llm_packets": False,
+          }:
+              raise SystemExit(f"Unexpected run manifest: {run_manifest}")
           archive = Path("reports/yoloe26_llm_crop_eval10/review_bundle.zip")
           index = Path("reports/yoloe26_llm_crop_eval10/review_bundle/index.html")
-          if not archive.is_file() or not index.is_file():
+          visual = Path("reports/yoloe26_llm_crop_eval10/visual_report.html")
+          if not archive.is_file() or not index.is_file() or not visual.is_file():
               raise SystemExit("Missing visual review bundle")
+          visual_text = visual.read_text(encoding="utf-8")
+          if "data:image/jpeg;base64," not in visual_text:
+              raise SystemExit("Self-contained HTML has no embedded images")
+          if 'src="../' in visual_text or 'src="assets/' in visual_text:
+              raise SystemExit("Self-contained HTML contains external image paths")
           print({
               "eval_n": len(eval_set),
               "packet_n": len(packets),
               "selected_n": len(selected),
               "branches": sorted(expected_branches),
-              "llm_calls": 0,
+              "field_rows": len(fields),
+              "llm_calls": run_manifest["external_llm_calls"],
+              "visual_report_bytes": visual.stat().st_size,
           })
           PY
 

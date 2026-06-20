@@ -58,6 +58,18 @@ ROLE_ORDER = (
     "annotation",
 )
 
+REFERENCE_EVIDENCE_FIELDS = (
+    "catalogNumber",
+    "scientificName",
+    "recordedBy",
+    "eventDate",
+    "country",
+    "stateProvince",
+    "decimalLatitude",
+    "decimalLongitude",
+    "typeStatus",
+)
+
 
 def parse_bbox(value: Any) -> list[int]:
     if isinstance(value, (list, tuple)):
@@ -106,6 +118,44 @@ def component_role(component_type: Any) -> str:
 
 def normalized_text(value: Any) -> str:
     return re.sub(r"[^a-z0-9]+", "", clean_str(value).lower())
+
+
+def reference_evidence_variants(field: str, value: Any) -> set[str]:
+    text = clean_str(value)
+    normalized = normalized_text(text)
+    variants = {normalized} if normalized else set()
+    if field != "eventDate":
+        return variants
+    match = re.fullmatch(r"(\d{4})(?:-(\d{2})(?:-(\d{2}))?)?", text)
+    if not match:
+        return variants
+    year, month, day = match.groups()
+    if not month:
+        return variants
+    month_names = (
+        "", "jan", "feb", "mar", "apr", "may", "jun",
+        "jul", "aug", "sep", "oct", "nov", "dec",
+    )
+    month_number = int(month)
+    if not 1 <= month_number <= 12:
+        return variants
+    if day:
+        variants.update({
+            f"{day}{month}{year}",
+            f"{day}{month_names[month_number]}{year}",
+            f"{month_names[month_number]}{day}{year}",
+        })
+    else:
+        variants.add(f"{month_names[month_number]}{year}")
+    return variants
+
+
+def reference_evidence_hit(field: str, value: Any, evidence: Any) -> bool:
+    evidence_key = normalized_text(evidence)
+    return bool(evidence_key) and any(
+        variant in evidence_key
+        for variant in reference_evidence_variants(field, value)
+    )
 
 
 def text_similarity(left: Any, right: Any) -> float:

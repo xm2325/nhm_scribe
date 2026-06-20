@@ -3,6 +3,22 @@ name: YOLOE-26 LLM crop selector eval10
 paths:
   data_dir: data/experiments/yoloe26_llm_crop_eval10
   reports_dir: reports/yoloe26_llm_crop_eval10
+metadata:
+  source: csv
+  input_csv: data/fixtures/techtest_main_data_first10.csv
+sampling:
+  frozen_split_dir: ""
+  demo_size: 0
+  eval_size: 10
+  prefer_institution_disjoint: false
+image:
+  allow_download: true
+  shared_manifest_csv: ""
+  output_subdir: main_data_first10
+  timeout_seconds: 90
+  retries: 4
+  retry_backoff_seconds: 10
+  min_bytes: 4096
 layout:
   include_whole_sheet: false
   include_primary_labels: true

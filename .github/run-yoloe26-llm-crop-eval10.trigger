@@ -1,1 +1,1 @@
-Run the frozen eval10 comparison of final clean crop packets for LLM input.
+Run main_data rows 2-11 through the Hespi versus YOLOE-26 crop comparison.

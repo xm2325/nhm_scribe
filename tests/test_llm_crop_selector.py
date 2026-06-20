@@ -4,6 +4,8 @@ from herbarium_scribe.llm_crop_selector import (
     duplicate_reason,
     evidence_gate,
     hierarchical_deduplicate,
+    reference_evidence_hit,
+    reference_evidence_variants,
     select_diverse_crops,
     selected_duplicate_pair_count,
 )
@@ -77,6 +79,20 @@ def test_high_confidence_handwriting_can_be_vision_only():
         text="",
     )
     assert evidence_gate(row) == (True, "vision_only_high_confidence")
+
+
+def test_reference_evidence_hit_normalizes_punctuation_and_case():
+    assert reference_evidence_hit("catalogNumber", "L.2180891", "Barcode: l 2180891")
+
+
+def test_event_date_reference_accepts_label_order_and_month_name():
+    variants = reference_evidence_variants("eventDate", "2006-05-29")
+    assert "29may2006" in variants
+    assert reference_evidence_hit("eventDate", "2006-05-29", "Collected 29 May 2006")
+
+
+def test_empty_reference_never_hits():
+    assert reference_evidence_hit("country", "", "China") is False
 
 
 def test_crop_selector_preserves_role_diversity_and_limit():
