@@ -28,6 +28,9 @@ hespi = [
   "sentencepiece>=0.2.0",
   "transformers==4.55.4",
 ]
+yoloe = [
+  "ultralytics==8.4.0",
+]
 rag = [
   "faiss-cpu>=1.8",
   "scikit-learn>=1.4",

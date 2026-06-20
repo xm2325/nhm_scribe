@@ -1,0 +1,55 @@
+extends: configs/component_aware_eval10.yaml
+name: YOLOE-26 LLM crop selector eval10
+paths:
+  data_dir: data/experiments/yoloe26_llm_crop_eval10
+  reports_dir: reports/yoloe26_llm_crop_eval10
+layout:
+  include_whole_sheet: false
+  include_primary_labels: true
+  include_supplemental_components: true
+  include_label_fields: false
+  tiled_identifier_fallback: false
+llm:
+  backend: none
+yoloe:
+  model_name: yoloe-26s-seg.pt
+  weights_env: YOLOE_WEIGHTS
+  image_size: 1024
+  confidence: 0.05
+  iou: 0.55
+  max_detections: 60
+  agnostic_nms: true
+  device: cpu
+  prompts:
+    - primary specimen label
+    - printed label
+    - annotation label
+    - handwritten note
+    - database label
+    - barcode label
+    - catalog number
+    - type specimen label
+    - herbarium stamp
+crop_selector:
+  padding_fraction: 0.08
+  min_short_side: 256
+  max_long_side: 1800
+  total_limit: 8
+  vision_only_confidence: 0.20
+  class_thresholds:
+    primary_specimen_label: 0.08
+    printed_label: 0.10
+    annotation_label: 0.10
+    handwritten_data: 0.08
+    database_label: 0.10
+    barcode: 0.08
+    number: 0.05
+    type_label: 0.08
+    stamp: 0.08
+  role_quotas:
+    primary_label: 2
+    identifier_parent: 2
+    identifier_child: 3
+    annotation: 2
+outputs:
+  prefix: yoloe26_llm_crop_eval10

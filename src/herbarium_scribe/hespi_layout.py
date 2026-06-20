@@ -412,7 +412,7 @@ def detect_hespi_lite_layout(
             hespi_version = "unknown"
         hespi_device = clean_str(getattr(hespi, "device", ""))
         sheet_model = hespi.sheet_component_model
-        field_model = hespi.label_field_model
+        field_model = hespi.label_field_model if include_label_fields else None
     except Exception as exc:
         load_error = f"{type(exc).__name__}: {exc}"
         sheet_model = None
@@ -449,7 +449,11 @@ def detect_hespi_lite_layout(
                 whole_sheet_psm,
                 "SOURCE=whole_sheet" if structured_headers else "",
             ))
-        elif hespi is None or sheet_model is None or field_model is None:
+        elif (
+            hespi is None
+            or sheet_model is None
+            or (include_label_fields and field_model is None)
+        ):
             fallback_reason = f"hespi_load_failed:{load_error}"
             selected_rows.append(_fallback_row(
                 record,
