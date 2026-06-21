@@ -1,0 +1,1 @@
+This experiment compares the previous parent child selector with a region panel selector for YOLOE 26 crops.
