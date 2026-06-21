@@ -78,7 +78,9 @@ jobs:
         run: |
           python - <<'PY'
           import json
+          import sys
           from pathlib import Path
+          sys.path.insert(0, str(Path("scripts").resolve()))
           import pandas as pd
           import run_yoloe26_llm_crop_eval10 as base
           import run_yoloe26_parent_child_first10 as old_pc
