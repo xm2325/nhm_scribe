@@ -1,0 +1,215 @@
+name: YOLOE-26 maxdet200 two-record OCR queue
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - yoloe26-region-panel-selection-v1
+    paths:
+      - ".github/workflows/yoloe26_maxdet200_two_records.yml"
+      - "scripts/run_yoloe26_region_panel_first10.py"
+      - "scripts/run_yoloe26_parent_child_first10.py"
+      - "scripts/run_yoloe26_llm_crop_eval10.py"
+      - "src/herbarium_scribe/**"
+      - "configs/yoloe26_llm_crop_eval10.yaml"
+  pull_request:
+    branches:
+      - main
+    paths:
+      - ".github/workflows/yoloe26_maxdet200_two_records.yml"
+      - "scripts/run_yoloe26_region_panel_first10.py"
+      - "scripts/run_yoloe26_parent_child_first10.py"
+      - "scripts/run_yoloe26_llm_crop_eval10.py"
+      - "src/herbarium_scribe/**"
+      - "configs/yoloe26_llm_crop_eval10.yaml"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: yoloe26-maxdet200-two-records-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  compare-maxdet200-two-records:
+    runs-on: ubuntu-latest
+    timeout-minutes: 300
+    env:
+      HF_HUB_DISABLE_XET: "1"
+      YOLOE_WEIGHTS: .cache/models/yoloe-26s-seg.pt
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+
+      - name: Cache detector models
+        uses: actions/cache@v5
+        with:
+          path: |
+            .cache/models
+            ~/.cache/hespi
+            ~/.cache/huggingface
+            ~/.cache/torch
+            ~/.cache/Ultralytics
+          key: hespi-yoloe26-maxdet200-two-records-${{ runner.os }}-v1
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y tesseract-ocr
+          python -m pip install --upgrade pip
+          python -m pip install -e '.[dev,hespi,yoloe]'
+
+      - name: Download YOLOE-26s weights
+        run: |
+          mkdir -p .cache/models
+          if [ ! -s "$YOLOE_WEIGHTS" ]; then
+            curl --fail --location --retry 3 \
+              https://github.com/ultralytics/assets/releases/download/v8.4.0/yoloe-26s-seg.pt \
+              --output "$YOLOE_WEIGHTS"
+          fi
+
+      - name: Run tests
+        run: python -m pytest
+
+      - name: Run maxdet200 two-record comparison
+        run: |
+          python - <<'PY'
+          import json
+          import sys
+          from pathlib import Path
+          sys.path.insert(0, str(Path("scripts").resolve()))
+          import pandas as pd
+          import run_yoloe26_llm_crop_eval10 as base
+          import run_yoloe26_parent_child_first10 as old_pc
+          import run_yoloe26_region_panel_first10 as region_panel
+
+          target_catalogs = ["L.2180891", "E00431342"]
+          orig_stage_metadata = base.stage_metadata
+          orig_load_runtime = base.load_runtime
+
+          def filtered_stage_metadata(config_path):
+              metadata, eval_df, extra = orig_stage_metadata(config_path)
+              eval_df = eval_df[eval_df["catalogNumber"].astype(str).isin(target_catalogs)].copy()
+              eval_df["_target_order"] = eval_df["catalogNumber"].map({value: index for index, value in enumerate(target_catalogs)})
+              eval_df = eval_df.sort_values("_target_order").drop(columns=["_target_order"]).reset_index(drop=True)
+              if len(eval_df) != len(target_catalogs):
+                  raise SystemExit(f"Could not find all target records. Found {eval_df['catalogNumber'].tolist()}")
+              return metadata, eval_df, extra
+
+          def maxdet200_load_runtime(config_path):
+              cfg, paths = orig_load_runtime(config_path)
+              cfg.setdefault("yoloe", {})["max_detections"] = 200
+              return cfg, paths
+
+          base.stage_metadata = filtered_stage_metadata
+          base.load_runtime = maxdet200_load_runtime
+          old_pc.base.stage_metadata = filtered_stage_metadata
+          old_pc.base.load_runtime = maxdet200_load_runtime
+          region_panel.base.stage_metadata = filtered_stage_metadata
+          region_panel.base.load_runtime = maxdet200_load_runtime
+          region_panel.main()
+
+          processed = Path("data/experiments/yoloe26_llm_crop_eval10/processed")
+          manifest_path = processed / "run_manifest.json"
+          manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+          manifest["target_catalogs"] = target_catalogs
+          manifest["target_occurrence_ids"] = [
+              "http://data.biodiversitydata.nl/naturalis/specimen/L.2180891",
+              "http://data.rbge.org.uk/herb/E00431342",
+          ]
+          manifest["yoloe_max_detections_override"] = 200
+          manifest_path.write_text(json.dumps(manifest, indent=2, ensure_ascii=False), encoding="utf-8")
+          PY
+
+      - name: Verify maxdet200 two-record outputs
+        run: |
+          python - <<'PY'
+          import json
+          from pathlib import Path
+          import pandas as pd
+
+          root = Path("data/experiments/yoloe26_llm_crop_eval10/processed")
+          required = {
+              "branch_metrics.csv",
+              "crop_decisions.csv",
+              "eval_set.csv",
+              "field_evidence_metrics.csv",
+              "field_evidence_summary.csv",
+              "llm_input_packets.jsonl",
+              "parent_child_summary.csv",
+              "record_metrics.csv",
+              "region_panel_summary.csv",
+              "run_manifest.json",
+              "selected_crops.csv",
+          }
+          missing = sorted(name for name in required if not (root / name).is_file())
+          if missing:
+              raise SystemExit(f"Missing output files: {missing}")
+
+          expected_catalogs = ["L.2180891", "E00431342"]
+          eval_set = pd.read_csv(root / "eval_set.csv", dtype=str).fillna("")
+          if eval_set["catalogNumber"].tolist() != expected_catalogs:
+              raise SystemExit(f"Unexpected eval_set records: {eval_set['catalogNumber'].tolist()}")
+
+          selected = pd.read_csv(root / "selected_crops.csv", dtype=str).fillna("")
+          decisions = pd.read_csv(root / "crop_decisions.csv", dtype=str).fillna("")
+          panels = pd.read_csv(root / "region_panel_summary.csv", dtype=str).fillna("")
+          manifest = json.loads((root / "run_manifest.json").read_text(encoding="utf-8"))
+          packets = [json.loads(line) for line in (root / "llm_input_packets.jsonl").read_text(encoding="utf-8").splitlines() if line.strip()]
+
+          if manifest.get("yoloe_max_detections_override") != 200:
+              raise SystemExit(f"Missing maxdet200 manifest lock: {manifest}")
+          if manifest.get("target_catalogs") != expected_catalogs:
+              raise SystemExit(f"Missing target catalog lock: {manifest}")
+          if manifest.get("region_panel_strategy", {}).get("uses_ocr_for_selection") is not False:
+              raise SystemExit(f"Region-panel selection must be OCR-free: {manifest}")
+          if not selected["component_type"].eq("region_panel").any():
+              raise SystemExit("No selected region_panel images were produced")
+          if not panels["member_status"].eq("panel_member_in_selected_llm_image").any():
+              raise SystemExit("No selected panel member rows were produced")
+          if not decisions["selection_status"].eq("not_sent_duplicate_visual_crop").any():
+              raise SystemExit("No duplicate visual crop rows were marked")
+
+          counts = selected.groupby(["branch", "occurrenceID"]).size()
+          if len(counts) and int(counts.max()) > 12:
+              raise SystemExit(f"A packet exceeded 12 images: {int(counts.max())}")
+          parent_counts = selected[selected["branch"].eq("yoloe_parent_child")].groupby(["branch", "occurrenceID"]).size()
+          if len(parent_counts) and int(parent_counts.max()) > 8:
+              raise SystemExit(f"Parent-child baseline exceeded 8 images: {int(parent_counts.max())}")
+          if any(len(packet["images"]) > 12 for packet in packets):
+              raise SystemExit("Serialized packet exceeded 12 images")
+
+          visual = Path("reports/yoloe26_llm_crop_eval10/visual_report.html")
+          if not visual.is_file():
+              raise SystemExit("Missing visual_report.html")
+          html = visual.read_text(encoding="utf-8")
+          if "data:image/jpeg;base64," not in html:
+              raise SystemExit("visual_report.html is not self-contained")
+          if 'src="../' in html or 'src="assets/' in html:
+              raise SystemExit("visual_report.html contains external image paths")
+
+          print({
+              "target_catalogs": expected_catalogs,
+              "selected_rows": len(selected),
+              "max_packet_size": int(counts.max()),
+              "region_panel_rows": int(selected["component_type"].eq("region_panel").sum()),
+              "panel_member_rows": int(panels["member_status"].eq("panel_member_in_selected_llm_image").sum()),
+              "duplicate_visual_rows": int(decisions["selection_status"].eq("not_sent_duplicate_visual_crop").sum()),
+              "visual_report_bytes": visual.stat().st_size,
+          })
+          PY
+
+      - name: Upload maxdet200 two-record artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: herbarium-scribe-yoloe26-maxdet200-two-records-${{ github.run_id }}
+          retention-days: 30
+          path: |
+            data/experiments/yoloe26_llm_crop_eval10/processed/
+            data/experiments/yoloe26_llm_crop_eval10/interim/hespi_lite/
+            data/experiments/yoloe26_llm_crop_eval10/interim/crops/llm_crop_eval/
+            reports/yoloe26_llm_crop_eval10/

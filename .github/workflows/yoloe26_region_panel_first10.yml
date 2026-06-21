@@ -1,0 +1,121 @@
+name: main_data first10 region-panel OCR queue
+
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - "scripts/run_yoloe26_region_panel_first10.py"
+      - "scripts/run_yoloe26_parent_child_first10.py"
+      - "scripts/run_yoloe26_llm_crop_eval10.py"
+      - "src/herbarium_scribe/**"
+      - "configs/yoloe26_llm_crop_eval10.yaml"
+      - ".github/workflows/yoloe26_region_panel_first10.yml"
+
+jobs:
+  compare-region-panel:
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    env:
+      HF_HUB_DISABLE_XET: "1"
+      YOLOE_WEIGHTS: .cache/models/yoloe-26s-seg.pt
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+
+      - name: Cache detector models
+        uses: actions/cache@v5
+        with:
+          path: |
+            .cache/models
+            ~/.cache/hespi
+            ~/.cache/torch
+            ~/.cache/Ultralytics
+          key: detector-models-yoloe26-region-panel-v1
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y tesseract-ocr
+          python -m pip install --upgrade pip
+          python -m pip install -e '.[dev,hespi,yoloe]'
+
+      - name: Download YOLOE-26s weights
+        run: |
+          mkdir -p .cache/models
+          if [ ! -s "$YOLOE_WEIGHTS" ]; then
+            curl --fail --location --retry 3 \
+              https://github.com/ultralytics/assets/releases/download/v8.4.0/yoloe-26s-seg.pt \
+              --output "$YOLOE_WEIGHTS"
+          fi
+
+      - name: Run tests
+        run: python -m pytest
+
+      - name: Compare region-panel OCR queues on main_data first10
+        run: python scripts/run_yoloe26_region_panel_first10.py
+
+      - name: Verify region-panel outputs
+        run: |
+          python - <<'PY'
+          import json
+          from pathlib import Path
+          import pandas as pd
+          root = Path("data/experiments/yoloe26_llm_crop_eval10/processed")
+          expected_files = {"branch_metrics.csv", "crop_decisions.csv", "eval_set.csv", "field_evidence_metrics.csv", "field_evidence_summary.csv", "llm_input_packets.jsonl", "parent_child_summary.csv", "record_metrics.csv", "region_panel_summary.csv", "run_manifest.json", "selected_crops.csv"}
+          missing = sorted(name for name in expected_files if not (root / name).is_file())
+          if missing:
+              raise SystemExit(f"Missing experiment artifacts: {missing}")
+          expected_branches = {"yoloe_parent_child", "yoloe_region_panel_v1", "hespi_yoloe_region_panel_union_v1"}
+          eval_set = pd.read_csv(root / "eval_set.csv", dtype=str).fillna("")
+          branches = pd.read_csv(root / "branch_metrics.csv")
+          selected = pd.read_csv(root / "selected_crops.csv", dtype=str).fillna("")
+          decisions = pd.read_csv(root / "crop_decisions.csv", dtype=str).fillna("")
+          panels = pd.read_csv(root / "region_panel_summary.csv", dtype=str).fillna("")
+          manifest = json.loads((root / "run_manifest.json").read_text(encoding="utf-8"))
+          packets = [json.loads(line) for line in (root / "llm_input_packets.jsonl").read_text(encoding="utf-8").splitlines() if line.strip()]
+          expected_catalogs = ["E00289691", "K000587145", "BM000796649", "K000821274", "L.2180891", "K001031711", "BR0000009519527", "E00431314", "E00431342", "BM000574146"]
+          if eval_set["catalogNumber"].tolist() != expected_catalogs:
+              raise SystemExit(f"Not main_data rows 2-11: {eval_set['catalogNumber'].tolist()}")
+          if set(branches["branch"]) != expected_branches:
+              raise SystemExit(f"Unexpected branches: {set(branches['branch'])}")
+          if set(selected["branch"]) != expected_branches:
+              raise SystemExit(f"At least one branch selected no crops: {set(selected['branch'])}")
+          if manifest.get("region_panel_strategy", {}).get("uses_ocr_for_selection") is not False:
+              raise SystemExit(f"Region-panel manifest does not lock OCR-free selection: {manifest}")
+          if manifest.get("region_panel_strategy", {}).get("max_panel_images_per_record") != 12:
+              raise SystemExit(f"Unexpected region-panel packet cap: {manifest}")
+          if not selected["component_type"].eq("region_panel").any():
+              raise SystemExit("No selected region_panel images were produced")
+          if not panels["member_status"].eq("panel_member_in_selected_llm_image").any():
+              raise SystemExit("No panel member rows were produced")
+          if not decisions["selection_status"].eq("not_sent_duplicate_visual_crop").any():
+              raise SystemExit("No duplicate visual crop rows were marked")
+          counts = selected.groupby(["branch", "occurrenceID"]).size()
+          if len(counts) and int(counts.max()) > 12:
+              raise SystemExit(f"Region-panel packet exceeded twelve images: {int(counts.max())}")
+          if any(len(packet["images"]) > 12 for packet in packets):
+              raise SystemExit("Serialized LLM packet exceeded twelve images")
+          visual = Path("reports/yoloe26_llm_crop_eval10/visual_report.html")
+          if not visual.is_file():
+              raise SystemExit("Missing visual_report.html")
+          visual_text = visual.read_text(encoding="utf-8")
+          if "data:image/jpeg;base64," not in visual_text:
+              raise SystemExit("Self-contained HTML has no embedded images")
+          if 'src="../' in visual_text or 'src="assets/' in visual_text:
+              raise SystemExit("Self-contained HTML contains external image paths")
+          print({"eval_n": len(eval_set), "branches": sorted(expected_branches), "selected_n": len(selected), "region_panel_rows": int(selected["component_type"].eq("region_panel").sum()), "panel_member_rows": int(panels["member_status"].eq("panel_member_in_selected_llm_image").sum()), "duplicate_visual_rows": int(decisions["selection_status"].eq("not_sent_duplicate_visual_crop").sum()), "max_packet_size": int(counts.max()), "visual_report_bytes": visual.stat().st_size})
+          PY
+
+      - name: Upload region-panel comparison artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: herbarium-scribe-yoloe26-region-panel-first10-${{ github.run_id }}
+          retention-days: 30
+          path: |
+            data/experiments/yoloe26_llm_crop_eval10/processed/
+            data/experiments/yoloe26_llm_crop_eval10/interim/hespi_lite/
+            data/experiments/yoloe26_llm_crop_eval10/interim/crops/llm_crop_eval/
+            reports/yoloe26_llm_crop_eval10/

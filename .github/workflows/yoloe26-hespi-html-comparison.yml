@@ -1,0 +1,57 @@
+name: YOLOE-26 vs Hespi herbarium HTML comparison
+
+on:
+  push:
+    branches:
+      - yoloe26-hespi-html-comparison
+  pull_request:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  compare:
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+
+      - name: Cache model downloads
+        uses: actions/cache@v5
+        with:
+          path: |
+            ~/.cache/hespi
+            ~/.cache/torch
+            ~/.cache/ultralytics
+          key: yoloe26-hespi-${{ runner.os }}-v1
+
+      - name: Install detector dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -e '.[hespi]'
+          python -m pip install --upgrade ultralytics
+
+      - name: Run executable comparison on frozen eval10 bundle
+        run: python scripts/run_yoloe26_hespi_eval10_bundle.py
+
+      - name: Verify HTML report
+        run: |
+          test -s reports/yoloe26_hespi_compare/yoloe26_vs_hespi_eval10.html
+          ls -lh reports/yoloe26_hespi_compare/
+
+      - name: Upload self-contained HTML report and CSV
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: yoloe26-hespi-html
+          retention-days: 14
+          path: |
+            reports/yoloe26_hespi_compare/yoloe26_vs_hespi_eval10.html
+            reports/yoloe26_hespi_compare/detections.csv
